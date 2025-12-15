@@ -1,6 +1,7 @@
 #include "HoverBubble.h"
-#include <QPainter>
-#include <QFontMetricsF>
+// Module-qualified Qt includes
+#include <QtGui/QPainter>
+#include <QtGui/QFontMetricsF>
 #include <algorithm>
 
 HoverBubble::HoverBubble(QGraphicsItem* parent)

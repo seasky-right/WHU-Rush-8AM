@@ -1,21 +1,22 @@
 #include "MapWidget.h"
-#include <QGraphicsEllipseItem>
-#include <QGraphicsLineItem>
-#include <QGraphicsTextItem>
+// Module-qualified includes
+#include <QtWidgets/QGraphicsEllipseItem>
+#include <QtWidgets/QGraphicsLineItem>
+#include <QtWidgets/QGraphicsTextItem>
 #include "HoverBubble.h"
-#include <QMouseEvent>
-#include <QDebug>
+#include <QtGui/QMouseEvent>
+#include <QtCore/QDebug>
 #include <cmath>
-#include <QGraphicsPixmapItem>
-#include <QPixmap>
-#include <QResizeEvent>
-#include <QScrollBar>
-#include <QTimer>
-#include <QDateTime>
+#include <QtWidgets/QGraphicsPixmapItem>
+#include <QtGui/QPixmap>
+#include <QtGui/QResizeEvent>
+#include <QtWidgets/QScrollBar>
+#include <QtCore/QTimer>
+#include <QtCore/QDateTime>
 #include <algorithm>
-#include <QEasingCurve>
-#include <QPropertyAnimation>
-#include <QParallelAnimationGroup>
+#include <QtCore/QEasingCurve>
+#include <QtCore/QPropertyAnimation>
+#include <QtCore/QParallelAnimationGroup>
 
 MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
 {

@@ -1,11 +1,18 @@
 #ifndef HOVERBUBBLE_H
 #define HOVERBUBBLE_H
 
-#include <QGraphicsObject>
-#include <QColor>
-#include <QFont>
-#include <QPointF>
-#include <QRectF>
+// QGraphicsObject is provided by the Qt Widgets module; use the module-qualified include
+// Module-qualified Qt includes
+#include <QtCore/QPointF>
+#include <QtCore/QRectF>
+#include <QtCore/QString>
+#include <QtGui/QPainter>
+#include <QtWidgets/QStyleOptionGraphicsItem>
+#include <QtWidgets/QWidget>
+#include <QtWidgets/QGraphicsObject>
+#include <QtCore/QString>
+#include <QtGui/QColor>
+#include <QtGui/QFont>
 
 class HoverBubble : public QGraphicsObject
 {

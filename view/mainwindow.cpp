@@ -1,20 +1,27 @@
 #include "MainWindow.h"
-#include <QHBoxLayout>
-#include <QVBoxLayout>
-#include <QGroupBox>
-#include <QMessageBox>
-#include <QDebug>
-#include <QTimer>
-#include <QDir>
-#include <QCoreApplication>
-#include <QFileInfo>
+// Module-qualified Qt includes
+#include <QtWidgets/QHBoxLayout>
+#include <QtWidgets/QVBoxLayout>
+#include <QtWidgets/QGroupBox>
+#include <QtWidgets/QMessageBox>
+#include <QtCore/QDebug>
+#include <QtCore/QTimer>
+#include <QtCore/QDir>
+#include <QtCore/QCoreApplication>
+#include <QtCore/QFileInfo>
+#include <QtWidgets/QLabel>
+#include <QtWidgets/QLineEdit>
+#include <QtWidgets/QPushButton>
+#include <QtWidgets/QScrollArea>
+#include <QtWidgets/QLayoutItem>
+#include <QtWidgets/QSizePolicy>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     // 1. 基础设置
     this->setWindowTitle("WHU Morning Rush - 早八冲锋号");
-    this->resize(1200, 800);
+    this->resize(1400, 800);
 
     // 2. 初始化核心逻辑
     model = new GraphModel();
@@ -87,14 +94,14 @@ void MainWindow::setupUi()
 
     // --- 左侧控制栏 ---
     QGroupBox* controlPanel = new QGroupBox("通勤控制台");
-    controlPanel->setFixedWidth(300); // 固定宽度
+    controlPanel->setFixedWidth(350);
     QVBoxLayout* panelLayout = new QVBoxLayout(controlPanel);
 
     // 起点
     panelLayout->addWidget(new QLabel("起点 (左键点击地图):"));
     startEdit = new QLineEdit();
     startEdit->setPlaceholderText("请选择起点...");
-    startEdit->setReadOnly(true); // 暂时只允许点击选择
+    startEdit->setReadOnly(true);
     panelLayout->addWidget(startEdit);
 
     // 终点
@@ -106,24 +113,49 @@ void MainWindow::setupUi()
 
     // 按钮
     panelLayout->addSpacing(20);
-    searchBtn = new QPushButton("🚀 开始监测");
+    searchBtn = new QPushButton("🚀 开始推荐");
     searchBtn->setStyleSheet("background-color: #2ECC71; color: white; font-weight: bold; padding: 10px; border-radius: 5px;");
     panelLayout->addWidget(searchBtn);
 
+    // 分隔线
+    panelLayout->addSpacing(20);
+    
+    // 路线推荐面板
+    QLabel* routeLabel = new QLabel("推荐路线:");
+    routeLabel->setStyleSheet("font-weight: bold; font-size: 12px;");
+    panelLayout->addWidget(routeLabel);
+    
+    // 创建滚动区域用于显示路线按钮
+    routeScrollArea = new QScrollArea();
+    routeScrollArea->setWidgetResizable(true);
+    routeScrollArea->setStyleSheet("QScrollArea { border: 1px solid #D0D0D0; border-radius: 3px; }");
+    routeScrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    
+    routePanelWidget = new QWidget();
+    routePanelWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    routePanelLayout = new QVBoxLayout(routePanelWidget);
+    routePanelLayout->setContentsMargins(5, 5, 5, 5);
+    routePanelLayout->setSpacing(8);
+    routePanelLayout->setAlignment(Qt::AlignTop);
+    routePanelLayout->addStretch();
+    
+    routeScrollArea->setWidget(routePanelWidget);
+    panelLayout->addWidget(routeScrollArea, 1);  // 给予伸缩空间
+
     // 状态栏
-    panelLayout->addStretch(); // 弹簧
+    panelLayout->addSpacing(10);
     statusLabel = new QLabel("就绪");
-    statusLabel->setStyleSheet("color: gray;");
+    statusLabel->setStyleSheet("color: gray; font-size: 10px;");
+    statusLabel->setWordWrap(true);
     panelLayout->addWidget(statusLabel);
 
     // --- 添加到主布局 ---
     mainLayout->addWidget(controlPanel);
-    mainLayout->addWidget(mapWidget);
+    mainLayout->addWidget(mapWidget, 1);  // mapWidget 占据剩余空间
 }
 
 void MainWindow::onMapNodeClicked(int nodeId, QString name, bool isLeftClick)
 {
-    qDebug() << "MainWindow received click:" << name << (isLeftClick ? "Left" : "Right"); // 调试输出
     if (isLeftClick) {
         startEdit->setText(name);
         currentStartId = nodeId;
@@ -142,28 +174,98 @@ void MainWindow::onStartSearch()
         return;
     }
 
-    QString msg = QString("准备计算从 ID:%1 到 ID:%2 的路径...").arg(currentStartId).arg(currentEndId);
-    statusLabel->setText(msg);
-    qDebug() << msg;
+    statusLabel->setText("正在计算路线推荐...");
+    qDebug() << "开始计算多策略推荐路线...";
 
-    QVector<int> pathIds = model->findPath(currentStartId, currentEndId);
+    // 获取三条不同权重的路线
+    QVector<PathRecommendation> recommendations = model->recommendPaths(currentStartId, currentEndId);
 
-    if (pathIds.isEmpty()) {
-        statusLabel->setText("❌ 无法到达！");
-        QMessageBox::warning(this, "Oops", "这两个点之间没有路连通！");
+    if (recommendations.isEmpty()) {
+        statusLabel->setText("❌ 无法找到可行路线！");
+        QMessageBox::warning(this, "提示", "起点和终点之间没有可连通的路径！");
         return;
     }
 
-    QString pathStr = "路径: ";
-    for (int id : pathIds) {
-        Node n = model->getNode(id);
-        pathStr += n.name + " -> ";
-    }
-    pathStr.chop(4);
-
-    qDebug() << "计算成功！" << pathStr;
-    statusLabel->setText("✅ 规划成功！");
+    qDebug() << "找到" << recommendations.size() << "条推荐路线";
     
-    // 显示路径高亮和生长动画（动画持续1秒）
-    mapWidget->highlightPath(pathIds, 1.0);
+    // 显示推荐路线
+    displayRouteRecommendations(recommendations);
+    
+    statusLabel->setText(QString("✅ 找到 %1 条推荐路线，请选择！").arg(recommendations.size()));
+}
+
+void MainWindow::displayRouteRecommendations(const QVector<PathRecommendation>& recommendations)
+{
+    clearRoutePanel();
+
+    currentRecommendations = recommendations;
+    routeButtons.clear();
+    
+    // 创建每个路线的按钮
+    for (int i = 0; i < recommendations.size(); ++i) {
+        RouteButton* btn = new RouteButton(recommendations[i]);
+        routeButtons.append(btn);
+
+        // 添加按钮到面板
+        routePanelLayout->addWidget(btn);
+        
+        // 连接按钮的点击事件
+        connect(btn, &QPushButton::clicked, this, [this, i]() {
+            onRouteButtonClicked(i);
+        });
+        
+        // 连接悬停事件
+        connect(btn, &RouteButton::routeHovered, this, &MainWindow::onRouteHovered);
+        connect(btn, &RouteButton::routeUnhovered, this, &MainWindow::onRouteUnhovered);
+    }
+    
+    // 重新添加stretch
+    routePanelLayout->addStretch();
+}
+
+void MainWindow::clearRoutePanel()
+{
+    // 清空布局中的所有项目（按钮和占位）
+    while (routePanelLayout->count() > 0) {
+        QLayoutItem* item = routePanelLayout->takeAt(0);
+        if (QWidget* w = item->widget()) {
+            w->deleteLater();
+        }
+        delete item;
+    }
+    routeButtons.clear();
+    currentRecommendations.clear();
+}
+
+void MainWindow::onRouteButtonClicked(int routeIndex)
+{
+    if (routeIndex < 0 || routeIndex >= currentRecommendations.size()) {
+        return;
+    }
+    
+    const PathRecommendation& rec = currentRecommendations[routeIndex];
+    qDebug() << "用户选择了路线:" << rec.typeName;
+    
+    // 在地图上显示该路线的生长动画
+    mapWidget->highlightPath(rec.pathNodeIds, 1.0);
+    
+    statusLabel->setText(QString("已选择: %1 (%2) | 距离: %3m | 耗时: %4s")
+        .arg(rec.routeLabel)
+        .arg(rec.typeName)
+        .arg(static_cast<int>(rec.distance))
+        .arg(static_cast<int>(rec.duration)));
+}
+
+void MainWindow::onRouteHovered(const PathRecommendation& recommendation)
+{
+    // 当鼠标悬停在某条路线上时，显示预览动画
+    qDebug() << "悬停在路线:" << recommendation.typeName;
+    mapWidget->highlightPath(recommendation.pathNodeIds, 0.8);  // 预览时间稍短
+}
+
+void MainWindow::onRouteUnhovered()
+{
+    // 当鼠标离开时，清除预览
+    qDebug() << "鼠标离开路线";
+    mapWidget->clearPathHighlight();
 }

@@ -12,23 +12,11 @@ qt_add_executable(WHU-8am-Rush
     view/mainwindow.h
     mainwindow.ui
     model/GraphModel.h model/GraphModel.cpp
+    model/PathRecommendation.h
     GraphData.h
     view/MapWidget.h view/MapWidget.cpp
     view/HoverBubble.h view/HoverBubble.cpp
-)
-
-target_link_libraries(WHU-8am-Rush
-    PRIVATE
-        Qt::Core
-        Qt::Widgets
-)
-
-include(GNUInstallDirs)
-
-install(TARGETS WHU-8am-Rush
-    BUNDLE  DESTINATION .
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    view/RouteButton.h view/RouteButton.cpp
 )
 
 qt_generate_deploy_app_script(
@@ -46,3 +34,7 @@ add_custom_command(TARGET WHU-8am-Rush POST_BUILD
 )
 
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/Data DESTINATION ${CMAKE_BINARY_DIR})
+
+# Ensure C++17 and explicitly link required Qt6 modules to avoid undefined references at link time
+set_target_properties(WHU-8am-Rush PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
+target_link_libraries(WHU-8am-Rush PRIVATE Qt6::Widgets Qt6::Gui Qt6::Core)

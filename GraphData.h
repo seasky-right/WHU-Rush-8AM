@@ -23,6 +23,7 @@ struct Edge {
     double distance;
     int type;
     bool isSlope;
+    double slope;  // 坡度（百分比，如 0.08 = 8%）
     QString name;
     QString description;
 

@@ -1,20 +1,24 @@
 #ifndef MAPWIDGET_H
 #define MAPWIDGET_H
 
-#include <QGraphicsView>
-#include <QGraphicsScene>
-#include <QWheelEvent>
-#include <QResizeEvent>
-#include <QGraphicsPixmapItem>
-#include <QGraphicsLineItem>
-#include <QPixmap>
-#include <QTimer>
-#include <QEvent>
-#include <QMap>
-#include <QPointer>
-#include <QGraphicsTextItem>
-#include <QVariantAnimation>
-#include <QAbstractAnimation>
+// Qt module-qualified includes for clarity
+#include <QtWidgets/QGraphicsView>
+#include <QtWidgets/QGraphicsScene>
+#include <QtGui/QWheelEvent>
+#include <QtGui/QResizeEvent>
+#include <QtWidgets/QGraphicsPixmapItem>
+#include <QtWidgets/QGraphicsLineItem>
+#include <QtGui/QPixmap>
+#include <QtCore/QTimer>
+#include <QtCore/QEvent>
+#include <QtCore/QMap>
+#include <QtCore/QPointer>
+#include <QtWidgets/QGraphicsTextItem>
+#include <QtCore/QVariantAnimation>
+#include <QtCore/QAbstractAnimation>
+#include <QtCore/QVector>
+#include <QtCore/QPointF>
+#include <QtGui/QColor>
 #include "../GraphData.h"
 
 class MapWidget : public QGraphicsView
@@ -30,6 +34,7 @@ public:
     
     // 路径高亮和动画接口
     void highlightPath(const QVector<int>& pathNodeIds, double animationDuration = 1.0);
+    void clearPathHighlight();  // 公开接口，用于清除路径高亮
 
 signals:
     void nodeClicked(int nodeId, QString name, bool isLeftClick);
@@ -85,8 +90,7 @@ private:
     double animationDurationMs = 1000.0;  // 动画持续时间（毫秒）
     qint64 animationStartTime = 0;
     
-    // 清除路径高亮和动画
-    void clearPathHighlight();
+    // 清除路径高亮和动画（私有实现）
     void drawPathGrowthAnimation();
 };
 
