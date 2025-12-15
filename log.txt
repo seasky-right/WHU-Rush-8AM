@@ -1,3 +1,45 @@
-12-15-16-55 issue:地图缩放会直接导致分辨率降低而非正常缩放
-12-15-16-56 地图缩放实现
+12-15-16-55 issue1:地图缩放会直接导致分辨率降低而非正常缩放
+12-15-16-56 issue1 solve;地图缩放实现
 12-15-16-58 鼠标拖动地图实现
+12-15-17-29 悬停动画实现
+12-15-17-33 issue2:在选中某些悬停节点后拖动地图会导致闪退
+12-15-18-52 issue2 solve;悬停动画实现
+    好。简短说明发生了什么及为什么修复后不再崩溃：
+
+    - 症状与触发点  
+    多次点击/拖动时程序在清理悬停气泡或动画期间崩溃，调用栈指向 QObject::disconnect / clearHoverItems，说明是对已删除/无效 QObject 的信号/槽或 disconnect 操作导致的竞态/use-after-free。
+
+    - 根本原因  
+    1) 动画和 lambda 回调持有或访问了悬停项的裸指针（或错误类型的 QPointer），当用户快速切换/删除这些项时回调会访问已销毁对象。  
+    2) clearHoverItems 在删除项与停止动画的顺序或方式上不安全（显式 disconnect 对已经半销毁的 QObject 会触发问题）。  
+    3) 为了实现动画有时直接遍历 hoverItems，也会在项被删除同时遍历导致未定义行为。还有一些编译问题（如错误使用 QPointer<QGraphicsItem> 与 auto 类型推断）被同时修复。
+
+    - 采取的修复措施（关键点）  
+    1) 为每个悬停图元分配唯一 UID（存入 item->data(1000)），动画/回调按 UID 在 scene 中查找当前项，而不是存裸指针。这样回调即使在项被删除后也不会访问悬空指针。  
+    2) 动画用 QPointer<QVariantAnimation> 管理，停止时调用 stop() 并 deleteLater()，不再直接调用 disconnect()，避免在并发删除时触发 QObject::disconnect 崩溃。  
+    3) startHoverAppearAnimation 先快照 UID 列表（targets），每帧通过 UID 查找并更新项，避免并发修改 hoverItems 导致迭代器失效。  
+    4) 在 mousePressEvent 里先 clearHoverItems() 再发射节点点击，避免点击处理与悬停动画删除并行产生竞态。  
+    5) 修正了类型/编译问题（去掉错误的 QPointer 用法、把 auto 改为明确类型或正确的迭代方式）。
+
+    - 结果与建议  
+    - 结果：当前实现已消除之前的崩溃风险，复现步骤下不再直接闪退。  
+    - 建议：若要更稳健可把气泡元素封装到单个 QGraphicsObject 容器并用 QPointer 跟踪容器生命周期；减少每帧调用 scene->items()（性能/稳定性优化）；或在拖动时临时禁用动画以降低竞态概率。
+
+12-15-19-00 实现气泡元素的封装
+    **简短结论**：崩溃是由于悬停气泡相关的动画/回调在对象已被删除时仍访问其裸指针（或错误类型的 QPointer）并执行 disconnect/操作导致的竞态/Use‑After‑Free。修复通过统一生命周期、用 UID/安全指针替代裸指针和调整删除顺序消除了这个竞态。
+
+    - **根本原因**：动画 lambda /回调捕获或持有对 `QGraphicsItem` /相关 QObject 的裸指针，快速切换/拖动时这些对象被删除，回调再访问就触发未定义行为（堆栈指向 `QObject::disconnect`）。
+    - **触发场景**：连续快速悬停、点选、拖动或在动画进行中删除悬停项时容易复现。
+    - **主要修复**：
+    - **封装生命周期**：把气泡合并为单一的 `HoverBubble`（`QGraphicsObject`），把相关绘制与状态聚合到一个对象里，减少跨对象引用。HoverBubble.h / HoverBubble.cpp
+    - **UID + 场景查找**：给每个悬停项分配 UID（`item->data(1000)`），动画回调按 UID 在 `scene` 中查找当前项而不是持有裸指针，避免悬空访问。MapWidget.cpp
+    - **安全的动画管理**：用 `QPointer<QVariantAnimation>` 存动画，停止时调用 `stop()` + `deleteLater()`，不做不安全的 `disconnect()`。动画回调也不直接持有被动画对象的裸指针。
+    - **删除顺序与防护**：`clearHoverItems()` 先恢复隐藏标签，再停止/删除动画，最后移除并 delete 悬停项，避免在删除过程中触发回调访问半销毁对象。
+    - **事件次序调整**：在 `mousePressEvent()` 中先 `clearHoverItems()` 再发射点击信号，避免并发删除导致竞态。
+    - 已把新文件加入构建，解决链接错误（CMakeLists.txt 已更新）。
+    - **为什么现在安全**：回调不再直接访问已删除对象（用 UID 查找或 QPointer），动画的生命周期由对象拥有或安全管理，删除顺序保证不会在对象半销毁时做 disconnect/访问，因而消除了崩溃触发点。
+    - **建议的下一步**（可选）：
+    - 将逐帧 UID 查找的动画替换为对 `HoverBubble` 的 `QPropertyAnimation`（直接动画 `opacity` / scale），更简单且更安全。
+    - 优化性能：减少每帧 `scene->items()` 扫描，必要时缓存 QPointer 或直接对 `HoverBubble` 做属性动画。
+
+12-15-19-23 完成整个悬停气泡动画

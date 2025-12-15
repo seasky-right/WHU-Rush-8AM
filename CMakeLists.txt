@@ -14,6 +14,7 @@ qt_add_executable(WHU-8am-Rush
     model/GraphModel.h model/GraphModel.cpp
     GraphData.h
     view/MapWidget.h view/MapWidget.cpp
+    view/HoverBubble.h view/HoverBubble.cpp
 )
 
 target_link_libraries(WHU-8am-Rush

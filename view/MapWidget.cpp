@@ -2,6 +2,7 @@
 #include <QGraphicsEllipseItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsTextItem>
+#include "HoverBubble.h"
 #include <QMouseEvent>
 #include <QDebug>
 #include <cmath>
@@ -11,6 +12,10 @@
 #include <QScrollBar>
 #include <QTimer>
 #include <QDateTime>
+#include <algorithm>
+#include <QEasingCurve>
+#include <QPropertyAnimation>
+#include <QParallelAnimationGroup>
 
 MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
 {
@@ -23,6 +28,11 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     // 初始化动画计时器
     animationTimer = new QTimer(this);
     connect(animationTimer, &QTimer::timeout, this, &MapWidget::onAnimationTick);
+
+    // hover resume timer
+    hoverResumeTimer = new QTimer(this);
+    hoverResumeTimer->setSingleShot(true);
+    connect(hoverResumeTimer, &QTimer::timeout, this, &MapWidget::resumeHoverAnimations);
 }
 
 void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
@@ -36,6 +46,8 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         }
     }
     cachedNodes = nodes;
+    cachedEdges = edges;
+    nodeLabelItems.clear();
 
     QPen edgePen(QColor(200, 200, 200));
     edgePen.setWidth(3);
@@ -65,9 +77,12 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 
         if (!node.name.isEmpty()) {
             auto text = scene->addText(node.name);
-            text->setPos(node.x - 10, node.y + 5);
+            QRectF textBounds = text->boundingRect();
+            // 居中在节点下方：x居中，y在圆下方留小间距
+            text->setPos(node.x - textBounds.width()/2.0, node.y + r + 2);
             text->setDefaultTextColor(QColor("#555"));
             text->setZValue(10);
+            nodeLabelItems.insert(node.id, text);
         }
     }
 
@@ -84,18 +99,24 @@ void MapWidget::mousePressEvent(QMouseEvent *event)
     int nodeId = findNodeAt(scenePos);
 
     if (nodeId != -1) {
+        // 清理任何悬停临时项，避免动画或悬浮项在后续处理或槽中被访问导致竞态
+        clearHoverItems();
+
         QString name = "";
-        for(auto n : cachedNodes) if(n.id == nodeId) name = n.name;
+        for (const auto &n : cachedNodes) if (n.id == nodeId) name = n.name;
 
         bool isLeft = (event->button() == Qt::LeftButton);
         emit nodeClicked(nodeId, name, isLeft);
 
         qDebug() << "选中节点:" << name << (isLeft ? "[起点]" : "[终点]");
+        event->accept();
         return;
     }
 
     // 左键未点中节点：进入拖动模式
     if (event->button() == Qt::LeftButton) {
+        // pause hover animations while dragging to avoid races and CPU
+        pauseHoverAnimations();
         isDragging = true;
         lastMousePos = event->pos();
         event->accept();
@@ -136,6 +157,43 @@ void MapWidget::mouseMoveEvent(QMouseEvent *event)
         event->accept();
         return;
     }
+    
+    // 悬停命中测试（节点优先，其次路径）
+    QPointF scenePos = mapToScene(event->pos());
+    int hitNode = findNodeAt(scenePos);
+    if (hitNode != -1) {
+        if (hoveredNodeId != hitNode || hoveredEdgeIndex != -1) {
+            clearHoverItems();
+            hoveredNodeId = hitNode;
+            hoveredEdgeIndex = -1;
+            // 找到节点对象
+            for (const auto& n : cachedNodes) {
+                if (n.id == hitNode) { showNodeHoverBubble(n); break; }
+            }
+        }
+        event->accept();
+        return;
+    }
+
+    // 节点没命中，则检测路径
+    QPointF closest; int u=-1,v=-1; int edgeIdx = findEdgeAt(scenePos, closest, u, v);
+    if (edgeIdx != -1) {
+        if (hoveredEdgeIndex != edgeIdx || hoveredNodeId != -1) {
+            clearHoverItems();
+            hoveredEdgeIndex = edgeIdx;
+            hoveredNodeId = -1;
+            showEdgeHoverBubble(cachedEdges[edgeIdx], closest);
+        }
+        event->accept();
+        return;
+    }
+
+    // 未命中任何对象，清理悬停项
+    if (hoveredNodeId != -1 || hoveredEdgeIndex != -1) {
+        hoveredNodeId = -1;
+        hoveredEdgeIndex = -1;
+        clearHoverItems();
+    }
 
     QGraphicsView::mouseMoveEvent(event);
 }
@@ -145,11 +203,23 @@ void MapWidget::mouseReleaseEvent(QMouseEvent *event)
     // 停止拖动模式
     if (event->button() == Qt::LeftButton && isDragging) {
         isDragging = false;
+        // resume hover animations after drag
+        resumeHoverAnimations();
         event->accept();
         return;
     }
 
     QGraphicsView::mouseReleaseEvent(event);
+}
+
+void MapWidget::leaveEvent(QEvent *event)
+{
+    Q_UNUSED(event);
+    if (hoveredNodeId != -1 || hoveredEdgeIndex != -1) {
+        hoveredNodeId = -1;
+        hoveredEdgeIndex = -1;
+        clearHoverItems();
+    }
 }
 
 void MapWidget::setBackgroundImage(const QString& path)
@@ -190,6 +260,9 @@ void MapWidget::resizeEvent(QResizeEvent *event)
 {
     QGraphicsView::resizeEvent(event);
     // resize 时无需特殊处理，view 的缩放变换会自动影响所有 scene 项包括背景
+    // 暂停悬停动画，短延迟后恢复，避免在 resize 过程中的竞态和高 CPU
+    pauseHoverAnimations();
+    if (hoverResumeTimer) hoverResumeTimer->start(300);
 }
 
 int MapWidget::findNodeAt(const QPointF& pos)
@@ -204,6 +277,44 @@ int MapWidget::findNodeAt(const QPointF& pos)
         if (dist < threshold) {
             return node.id;
         }
+    }
+    return -1;
+}
+
+int MapWidget::findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV)
+{
+    if (cachedEdges.isEmpty() || cachedNodes.isEmpty()) return -1;
+    QMap<int, Node> nodeMap;
+    for (const auto& n : cachedNodes) nodeMap.insert(n.id, n);
+
+    int bestIdx = -1; double bestDist = 1e18; QPointF bestPt;
+    int bu=-1, bv=-1;
+    // 命中阈值（像素）
+    const double threshold = 10.0;
+
+    for (int i = 0; i < cachedEdges.size(); ++i) {
+        const auto& e = cachedEdges[i];
+        if (!nodeMap.contains(e.u) || !nodeMap.contains(e.v)) continue;
+        const auto& a = nodeMap[e.u];
+        const auto& b = nodeMap[e.v];
+        QPointF p(pos.x(), pos.y());
+        QPointF A(a.x, a.y), B(b.x, b.y);
+        QPointF AB = B - A;
+        double ab2 = AB.x()*AB.x() + AB.y()*AB.y();
+        if (ab2 <= 1e-6) continue;
+        double t = ((p.x()-A.x())*AB.x() + (p.y()-A.y())*AB.y()) / ab2;
+        t = std::max(0.0, std::min(1.0, t));
+        QPointF proj(A.x()+AB.x()*t, A.y()+AB.y()*t);
+        double dx = p.x()-proj.x();
+        double dy = p.y()-proj.y();
+        double dist2 = dx*dx + dy*dy;
+        if (dist2 < bestDist) {
+            bestDist = dist2; bestPt = proj; bu = e.u; bv = e.v; bestIdx = i;
+        }
+    }
+
+    if (bestIdx != -1 && std::sqrt(bestDist) <= threshold) {
+        closestPoint = bestPt; outU = bu; outV = bv; return bestIdx;
     }
     return -1;
 }
@@ -409,5 +520,237 @@ void MapWidget::clearPathHighlight()
     }
     
     this->viewport()->update();
+}
+
+// --------------------- 悬停绘制辅助 ---------------------
+
+QColor MapWidget::withAlpha(const QColor& c, int alpha)
+{
+    QColor t = c; t.setAlpha(alpha); return t;
+}
+
+void MapWidget::clearHoverItems()
+{
+    qDebug() << "clearHoverItems() called. hoverItems:" << hoverItems.size() << "hoverAnims:" << hoverAnims.size();
+    if (hoverItems.isEmpty()) return;
+
+    // 先恢复被隐藏的原始节点标签
+    for (int nid : hiddenLabelNodeIds) {
+        if (nodeLabelItems.contains(nid) && nodeLabelItems[nid]) {
+            nodeLabelItems[nid]->setVisible(true);
+        }
+    }
+    hiddenLabelNodeIds.clear();
+
+    // 停止并删除旧的出现动画
+    for (auto &a : hoverAnims) {
+        if (a) {
+            a->stop();
+            a->deleteLater();
+        }
+    }
+    hoverAnims.clear();
+
+    // 为每个气泡创建淡出动画
+    for (auto* it : hoverItems) {
+        if (!it) continue;
+        HoverBubble* hb = qgraphicsitem_cast<HoverBubble*>(it);
+        if (!hb) {
+            // 不是HoverBubble，直接删除
+            qDebug() << " - removing non-bubble item" << it;
+            scene->removeItem(it);
+            delete it;
+            continue;
+        }
+
+        // 创建淡出+缩小动画
+        auto* a_op = new QPropertyAnimation(hb, "opacity", this);
+        a_op->setDuration(120);
+        a_op->setStartValue(hb->opacity());
+        a_op->setEndValue(0.0);
+        a_op->setEasingCurve(QEasingCurve::InCubic);
+
+        auto* a_sc = new QPropertyAnimation(hb, "bubbleScale", this);
+        a_sc->setDuration(120);
+        a_sc->setStartValue(hb->bubbleScale());
+        a_sc->setEndValue(0.92);
+        a_sc->setEasingCurve(QEasingCurve::InCubic);
+
+        auto* group = new QParallelAnimationGroup(this);
+        group->addAnimation(a_op);
+        group->addAnimation(a_sc);
+        
+        // 动画完成后删除气泡
+        connect(group, &QAbstractAnimation::finished, this, [this, hb, group](){
+            qDebug() << " - fade-out finished, removing item" << hb;
+            if (hb && scene) {
+                scene->removeItem(hb);
+                delete hb;
+            }
+            group->deleteLater();
+        });
+        
+        group->start();
+    }
+    
+    hoverItems.clear();
+    this->viewport()->update();
+}
+
+void MapWidget::pauseHoverAnimations()
+{
+    // pause all running hover animations
+    for (auto &a : hoverAnims) {
+        if (a && a.data()) {
+            QAbstractAnimation* anim = a.data();
+            if (anim->state() == QAbstractAnimation::Running) {
+                anim->pause();
+            }
+        }
+    }
+}
+
+void MapWidget::resumeHoverAnimations()
+{
+    // resume paused hover animations
+    for (auto &a : hoverAnims) {
+        if (a && a.data()) {
+            QAbstractAnimation* anim = a.data();
+            if (anim->state() == QAbstractAnimation::Paused) {
+                anim->resume();
+            }
+        }
+    }
+}
+void MapWidget::startHoverAppearAnimation()
+{
+    qDebug() << "startHoverAppearAnimation() creating property animations for" << hoverItems.size() << "items";
+    for (auto* it : hoverItems) {
+        if (!it) continue;
+        HoverBubble* hb = qgraphicsitem_cast<HoverBubble*>(it);
+        if (!hb) continue;
+
+        // initial state
+        hb->setOpacity(0.0);
+        hb->setBubbleScale(0.96);
+
+        // opacity animation
+        auto* a_op = new QPropertyAnimation(hb, "opacity", this);
+        a_op->setDuration(140);
+        a_op->setStartValue(0.0);
+        a_op->setEndValue(1.0);
+        a_op->setEasingCurve(QEasingCurve::OutCubic);
+
+        // scale animation (custom property)
+        auto* a_sc = new QPropertyAnimation(hb, "bubbleScale", this);
+        a_sc->setDuration(140);
+        a_sc->setStartValue(0.96);
+        a_sc->setEndValue(1.0);
+        a_sc->setEasingCurve(QEasingCurve::OutCubic);
+
+        auto* group = new QParallelAnimationGroup(this);
+        group->addAnimation(a_op);
+        group->addAnimation(a_sc);
+        connect(group, &QAbstractAnimation::finished, group, &QObject::deleteLater);
+
+        hoverAnims.push_back(QPointer<QAbstractAnimation>(group));
+        group->start();
+    }
+}
+
+QColor MapWidget::nodeBaseColor(const Node& node) const
+{
+    Q_UNUSED(node);
+    // 如需按类型/分类定色，可在此拓展映射；当前与 drawMap 一致
+    return QColor("#2C3E50");
+}
+
+QColor MapWidget::edgeBaseColor(const Edge& edge) const
+{
+    Q_UNUSED(edge);
+    // 如需按类型/属性定色，可在此拓展映射；当前与 drawMap 一致
+    return QColor(200,200,200);
+}
+
+void MapWidget::showNodeHoverBubble(const Node& node)
+{
+    // create a single HoverBubble for the node
+    const QColor basePenColor = nodeBaseColor(node);
+    const QColor bubbleColor = withAlpha(basePenColor, 64);
+
+    HoverBubble* hb = new HoverBubble();
+    hb->setIsEdge(false);
+    QString name = node.name.isEmpty() ? QString("节点 %1").arg(node.id) : node.name;
+    QString desc = node.description;
+    hb->setBaseColor(bubbleColor);
+    hb->setContent(name, desc);
+    hb->setZValue(100);
+    hb->setCenterAt(QPointF(node.x, node.y));
+
+    quint64 uid = hoverUidCounter++;
+    hb->setData(1000, QVariant::fromValue((qulonglong)uid));
+    scene->addItem(hb);
+    hoverItems.push_back(hb);
+
+    // 隐藏原始标签
+    if (nodeLabelItems.contains(node.id) && nodeLabelItems[node.id]) {
+        nodeLabelItems[node.id]->setVisible(false);
+        hiddenLabelNodeIds.push_back(node.id);
+    }
+
+    startHoverAppearAnimation();
+}
+
+void MapWidget::showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoint)
+{
+    // 原路径颜色（参考 drawMap 或按类型映射）
+    const QColor baseEdgeColor = edgeBaseColor(edge);
+    const QColor bubbleColor = withAlpha(baseEdgeColor, 64); // 约 75% 透明度
+
+    // 端点
+    QMap<int, Node> nodeMap; for (const auto& n : cachedNodes) nodeMap.insert(n.id, n);
+    if (!nodeMap.contains(edge.u) || !nodeMap.contains(edge.v)) return;
+    const auto& a = nodeMap[edge.u];
+    const auto& b = nodeMap[edge.v];
+
+    // 将膨胀线段并入 HoverBubble（在 HoverBubble 内绘制），并用相同 uid 管理
+    quint64 uid = hoverUidCounter++;
+
+    // 隐藏边两端的原始节点标签（避免重叠干扰）
+    for (int nid : {edge.u, edge.v}) {
+        if (nodeLabelItems.contains(nid) && nodeLabelItems[nid]) {
+            nodeLabelItems[nid]->setVisible(false);
+            hiddenLabelNodeIds.push_back(nid);
+        }
+    }
+
+    // 文字内容
+    QString name = edge.name.trimmed();
+    if (name.isEmpty()) {
+        // fallback：使用两端点名称
+        QString au = nodeMap[edge.u].name; QString bv = nodeMap[edge.v].name;
+        name = au.isEmpty() || bv.isEmpty() ? QString("%1-%2").arg(edge.u).arg(edge.v) : (au + " - " + bv);
+    }
+    QString desc = edge.description;
+
+    // create HoverBubble for edge text/box at midpoint
+    QPointF A(a.x, a.y), B(b.x, b.y);
+    QPointF M((A.x()+B.x())/2.0, (A.y()+B.y())/2.0);
+    double dx = B.x()-A.x();
+    double dy = B.y()-A.y();
+    double angle = std::atan2(dy, dx) * 180.0 / M_PI; // degrees
+
+    HoverBubble* hb = new HoverBubble();
+    hb->setIsEdge(true);
+    hb->setBaseColor(bubbleColor);
+    hb->setContent(name, desc);
+    hb->setAngle(angle);
+    hb->setEdgeLine(A, B);
+    hb->setZValue(101);
+    hb->setData(1000, QVariant::fromValue((qulonglong)uid));
+    scene->addItem(hb);
+    hoverItems.push_back(hb);
+
+    startHoverAppearAnimation();
 }
 
