@@ -8,12 +8,12 @@ qt_standard_project_setup()
 qt_add_executable(WHU-8am-Rush
     WIN32 MACOSX_BUNDLE
     main.cpp
-    mainwindow.cpp
-    mainwindow.h
+    view/mainwindow.cpp
+    view/mainwindow.h
     mainwindow.ui
-    GraphModel.h GraphModel.cpp
+    model/GraphModel.h model/GraphModel.cpp
     GraphData.h
-    mapwidget.h mapwidget.cpp
+    view/MapWidget.h view/MapWidget.cpp
 )
 
 target_link_libraries(WHU-8am-Rush
@@ -36,3 +36,12 @@ qt_generate_deploy_app_script(
     NO_UNSUPPORTED_PLATFORM_ERROR
 )
 install(SCRIPT ${deploy_script})
+
+# Post-build: copy Data directory to the target executable directory so runtime can find Data/map.png and data files
+add_custom_command(TARGET WHU-8am-Rush POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/Data"
+    "$<TARGET_FILE_DIR:WHU-8am-Rush>/Data"
+)
+
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/Data DESTINATION ${CMAKE_BINARY_DIR})
