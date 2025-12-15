@@ -15,6 +15,8 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QLayoutItem>
 #include <QtWidgets/QSizePolicy>
+#include <QtWidgets/QComboBox>
+#include "../model/MapEditor.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -33,6 +35,7 @@ MainWindow::MainWindow(QWidget *parent)
     // 4. 连接信号与槽
     // 当地图被点击 -> 触发 onMapNodeClicked
     connect(mapWidget, &MapWidget::nodeClicked, this, &MainWindow::onMapNodeClicked);
+    connect(mapWidget, &MapWidget::editPointPicked, this, &MainWindow::onEditPointPicked);
 
     // 当按钮被点击 -> 触发 onStartSearch
     connect(searchBtn, &QPushButton::clicked, this, &MainWindow::onStartSearch);
@@ -116,6 +119,17 @@ void MainWindow::setupUi()
     searchBtn = new QPushButton("🚀 开始推荐");
     searchBtn->setStyleSheet("background-color: #2ECC71; color: white; font-weight: bold; padding: 10px; border-radius: 5px;");
     panelLayout->addWidget(searchBtn);
+
+    // 编辑模式开关
+    editModeCheck = new QCheckBox("🛠️ 地图编辑模式 (Ctrl=建筑, 左键；右键=抬笔)");
+    panelLayout->addWidget(editModeCheck);
+    connect(editModeCheck, &QCheckBox::toggled, this, [this](bool on){
+        mapWidget->setEditMode(on);
+        statusLabel->setText(on ? "编辑模式已开启：左键添加，右键抬笔" : "编辑模式已关闭");
+    });
+
+    // 编辑器表单
+    setupEditorPanel(panelLayout);
 
     // 分隔线
     panelLayout->addSpacing(20);
@@ -246,7 +260,7 @@ void MainWindow::onRouteButtonClicked(int routeIndex)
     const PathRecommendation& rec = currentRecommendations[routeIndex];
     qDebug() << "用户选择了路线:" << rec.typeName;
     
-    // 在地图上显示该路线的生长动画
+    // 直接使用高亮并启动生长动画（原版本行为）
     mapWidget->highlightPath(rec.pathNodeIds, 1.0);
     
     statusLabel->setText(QString("已选择: %1 (%2) | 距离: %3m | 耗时: %4s")
@@ -268,4 +282,90 @@ void MainWindow::onRouteUnhovered()
     // 当鼠标离开时，清除预览
     qDebug() << "鼠标离开路线";
     mapWidget->clearPathHighlight();
+}
+
+// ------------------- 编辑模式 -------------------
+void MainWindow::setupEditorPanel(QVBoxLayout* panelLayout)
+{
+    QGroupBox* editorBox = new QGroupBox("地图编辑器");
+    QVBoxLayout* v = new QVBoxLayout(editorBox);
+
+    nodeCoordLabel = new QLabel("坐标: -");
+    v->addWidget(nodeCoordLabel);
+
+    nodeNameEdit = new QLineEdit();
+    nodeNameEdit->setPlaceholderText("名称 (默认为 building_/road_ 自动生成)");
+    v->addWidget(nodeNameEdit);
+
+    nodeTypeCombo = new QComboBox();
+    nodeTypeCombo->addItem("可见节点", 0);
+    nodeTypeCombo->addItem("幽灵节点", 9);
+    v->addWidget(nodeTypeCombo);
+
+    nodeDescEdit = new QLineEdit();
+    nodeDescEdit->setPlaceholderText("描述，默认 '无'");
+    v->addWidget(nodeDescEdit);
+
+    nodeCategoryEdit = new QLineEdit();
+    nodeCategoryEdit->setPlaceholderText("分类，默认 'None'");
+    v->addWidget(nodeCategoryEdit);
+
+    connectPrevCheck = new QCheckBox("连接到上一个已保存节点");
+    v->addWidget(connectPrevCheck);
+
+    edgeDescEdit = new QLineEdit();
+    edgeDescEdit->setPlaceholderText("道路描述，默认 '无'");
+    v->addWidget(edgeDescEdit);
+
+    saveNodeBtn = new QPushButton("💾 保存节点 / 可选连边");
+    v->addWidget(saveNodeBtn);
+    connect(saveNodeBtn, &QPushButton::clicked, this, &MainWindow::onSaveNode);
+
+    panelLayout->addWidget(editorBox);
+}
+
+void MainWindow::onEditPointPicked(QPointF pos, bool ctrlPressed)
+{
+    nodeCoordLabel->setText(QString("坐标: (%1, %2)").arg(pos.x(), 0, 'f', 2).arg(pos.y(), 0, 'f', 2));
+    nodeTypeCombo->setCurrentIndex(ctrlPressed ? 0 : 1); // ctrl->建筑
+    // 记录坐标在控件属性中
+    nodeCoordLabel->setProperty("sceneX", pos.x());
+    nodeCoordLabel->setProperty("sceneY", pos.y());
+}
+
+void MainWindow::onSaveNode()
+{
+    if (!mapWidget || !mapWidget->getEditor()) return;
+
+    double x = nodeCoordLabel->property("sceneX").toDouble();
+    double y = nodeCoordLabel->property("sceneY").toDouble();
+    if (!nodeCoordLabel->property("sceneX").isValid()) {
+        QMessageBox::warning(this, "提示", "请先在地图上点击一个点以确定坐标");
+        return;
+    }
+
+    QString name = nodeNameEdit->text();
+    int type = nodeTypeCombo->currentData().toInt();
+    QString desc = nodeDescEdit->text();
+    QString category = nodeCategoryEdit->text();
+    bool connectFlag = connectPrevCheck->isChecked() && (lastSavedNodeId != -1);
+    QString edgeDesc = edgeDescEdit->text();
+
+    int newId = mapWidget->getEditor()->createNode(name, QPointF(x,y), type,
+            desc, category, lastSavedNodeId, connectFlag, QStringLiteral("自动道路"), edgeDesc);
+
+    // 立即显示在地图上（包括幽灵节点）
+    mapWidget->addEditVisualNode(newId, name.isEmpty() ? QString::number(newId) : name, QPointF(x,y), type);
+
+    if (connectFlag) {
+        statusLabel->setText(QString("已保存节点 %1 并连接 %2").arg(newId).arg(lastSavedNodeId));
+    } else {
+        statusLabel->setText(QString("已保存节点 %1").arg(newId));
+    }
+
+    lastSavedNodeId = newId;
+    nodeNameEdit->clear();
+    nodeDescEdit->clear();
+    nodeCategoryEdit->clear();
+    edgeDescEdit->clear();
 }

@@ -4,6 +4,7 @@
 #include <QtWidgets/QGraphicsLineItem>
 #include <QtWidgets/QGraphicsTextItem>
 #include "HoverBubble.h"
+#include "../model/MapEditor.h"
 #include <QtGui/QMouseEvent>
 #include <QtCore/QDebug>
 #include <cmath>
@@ -11,12 +12,14 @@
 #include <QtGui/QPixmap>
 #include <QtGui/QResizeEvent>
 #include <QtWidgets/QScrollBar>
+#include <QtWidgets/QApplication>
 #include <QtCore/QTimer>
 #include <QtCore/QDateTime>
 #include <algorithm>
 #include <QtCore/QEasingCurve>
 #include <QtCore/QPropertyAnimation>
 #include <QtCore/QParallelAnimationGroup>
+#include <limits>
 
 MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
 {
@@ -25,6 +28,7 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     this->setRenderHint(QPainter::Antialiasing);
     this->setBackgroundBrush(QBrush(QColor(240, 240, 245)));
     this->setMouseTracking(true);
+    mapEditor = new MapEditor(this);
     
     // 初始化动画计时器
     animationTimer = new QTimer(this);
@@ -50,9 +54,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
     cachedEdges = edges;
     nodeLabelItems.clear();
 
-    QPen edgePen(QColor(200, 200, 200));
-    edgePen.setWidth(3);
-    edgePen.setCapStyle(Qt::RoundCap);
+    // 基础道路按类型设置样式
 
     QMap<int, Node> nodeMap;
     for(const auto& node : nodes) nodeMap.insert(node.id, node);
@@ -61,6 +63,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         if(nodeMap.contains(edge.u) && nodeMap.contains(edge.v)) {
             Node start = nodeMap[edge.u];
             Node end = nodeMap[edge.v];
+            QPen edgePen = edgePenForType(edge.type);
             auto line = scene->addLine(start.x, start.y, end.x, end.y, edgePen);
             line->setZValue(10);
         }
@@ -70,26 +73,52 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
     QPen nodePen(QColor("#2C3E50"));
     nodePen.setWidth(2);
 
+    // 计算节点包围盒
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+
     for(const auto& node : nodes) {
-        double r = 8.0;
-        auto item = scene->addEllipse(node.x - r, node.y - r, 2*r, 2*r, nodePen, nodeBrush);
-        item->setZValue(10);
+        bool isGhost = (node.type == 9);
+        // 编辑模式：幽灵节点也可见；普通模式仍隐藏幽灵节点
+        if (isGhost && !editMode) {
+            minX = std::min(minX, node.x);
+            minY = std::min(minY, node.y);
+            maxX = std::max(maxX, node.x);
+            maxY = std::max(maxY, node.y);
+            continue;
+        }
+        double r = isGhost ? 5.0 : 8.0;
+        QPen p = isGhost ? QPen(QColor(140, 140, 160)) : nodePen;
+        QBrush b = isGhost ? QBrush(QColor(180, 180, 200, 160)) : nodeBrush;
+        auto item = scene->addEllipse(node.x - r, node.y - r, 2*r, 2*r, p, b);
+        item->setZValue(isGhost ? 9 : 10);
         item->setData(0, node.id);
 
         if (!node.name.isEmpty()) {
             auto text = scene->addText(node.name);
             QRectF textBounds = text->boundingRect();
-            // 居中在节点下方：x居中，y在圆下方留小间距
             text->setPos(node.x - textBounds.width()/2.0, node.y + r + 2);
             text->setDefaultTextColor(QColor("#555"));
             text->setZValue(10);
             nodeLabelItems.insert(node.id, text);
         }
+
+        // 累积包围盒
+        minX = std::min(minX, node.x);
+        minY = std::min(minY, node.y);
+        maxX = std::max(maxX, node.x);
+        maxY = std::max(maxY, node.y);
     }
 
-    if (!nodes.isEmpty()) {
-        this->fitInView(scene->itemsBoundingRect(), Qt::KeepAspectRatio);
-        // 重置缩放因子为 1.0（因为 fitInView 改变了 view 的 transform）
+    // 设置场景矩形，避免背景图对 fitInView 的影响
+    if (!nodes.isEmpty() && std::isfinite(minX) && std::isfinite(minY) && std::isfinite(maxX) && std::isfinite(maxY)) {
+        const double margin = 40.0;
+        QRectF nodesRect(QPointF(minX, minY), QPointF(maxX, maxY));
+        nodesRect = nodesRect.adjusted(-margin, -margin, margin, margin);
+        scene->setSceneRect(nodesRect);
+        this->fitInView(scene->sceneRect(), Qt::KeepAspectRatio);
         currentScale = 1.0;
     }
 }
@@ -97,6 +126,24 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 void MapWidget::mousePressEvent(QMouseEvent *event)
 {
     QPointF scenePos = mapToScene(event->pos());
+    // 编辑模式：采集地图数据
+    if (editMode) {
+        if (event->button() == Qt::RightButton) {
+            if (mapEditor) mapEditor->resetConnection();
+            event->accept();
+            return;
+        }
+        if (event->button() == Qt::LeftButton) {
+            bool isCtrl = QApplication::keyboardModifiers().testFlag(Qt::ControlModifier);
+            // 发射信号，由 UI 收集更多字段后调用 MapEditor::createNode
+            emit editPointPicked(scenePos, isCtrl);
+            // 立即放置一个临时可视点，便于确认位置（幽灵节点也显示）
+            addEditVisualNode(-1, QString(), scenePos, isCtrl ? 0 : 9);
+            event->accept();
+            return;
+        }
+        // 其他按键直接忽略
+    }
     int nodeId = findNodeAt(scenePos);
 
     if (nodeId != -1) {
@@ -234,20 +281,20 @@ void MapWidget::setBackgroundImage(const QString& path)
         delete backgroundItem;
         backgroundItem = nullptr;
     }
-
-    // 如果 scene 中有节点，按节点范围缩放背景
-    QRectF sceneBounds = scene->itemsBoundingRect();
-    if (!sceneBounds.isEmpty()) {
-        // 缩放背景 pixmap 以匹配 scene 中节点的范围
-        QSize targetSize(qMax(1, int(sceneBounds.width())), qMax(1, int(sceneBounds.height())));
+    QRectF sr = scene->sceneRect();
+    if (!sr.isEmpty()) {
+        // 使用 KeepAspectRatioByExpanding 以覆盖整个 sceneRect，然后裁剪中心
+        QSize targetSize(qMax(1, int(sr.width())), qMax(1, int(sr.height())));
         QPixmap scaled = px.scaled(targetSize, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-        
-        // 创建背景项并设置位置
         backgroundItem = scene->addPixmap(scaled);
-        backgroundItem->setPos(sceneBounds.topLeft());
+        // 使背景铺满 sceneRect，以中心对齐
+        QPointF topLeft(sr.center().x() - scaled.width()/2.0, sr.center().y() - scaled.height()/2.0);
+        backgroundItem->setPos(topLeft);
     } else {
-        // 如果 scene 为空，暂时创建空的背景项
-        backgroundItem = scene->addPixmap(QPixmap());
+        // 若无 sceneRect，则用原图并设置 sceneRect 与之匹配
+        backgroundItem = scene->addPixmap(px);
+        scene->setSceneRect(QRectF(QPointF(0,0), QSizeF(px.size())));
+        backgroundItem->setPos(0,0);
     }
 
     // 确保背景在最底层
@@ -326,48 +373,82 @@ void MapWidget::setStartNode(int nodeId) {
 void MapWidget::setEndNode(int nodeId) {
 }
 
+void MapWidget::setEditMode(bool enabled)
+{
+    editMode = enabled;
+    // 切换时重绘（让幽灵节点在编辑模式下可见）
+    if (!cachedNodes.isEmpty() || !cachedEdges.isEmpty()) {
+        drawMap(cachedNodes, cachedEdges);
+    }
+}
+
+void MapWidget::clearEditTempItems()
+{
+    for (auto* it : editTempItems) {
+        if (it) {
+            scene->removeItem(it);
+            delete it;
+        }
+    }
+    editTempItems.clear();
+}
+
+void MapWidget::addEditVisualNode(int id, const QString& name, const QPointF& pos, int type)
+{
+    QPen p(type == 9 ? QColor(140,140,160) : QColor("#2C3E50"));
+    QBrush b(type == 9 ? QColor(180,180,200,180) : QColor("white"));
+    double r = (type == 9) ? 5.0 : 8.0;
+    auto* item = scene->addEllipse(pos.x()-r, pos.y()-r, 2*r, 2*r, p, b);
+    item->setZValue(12);
+    item->setData(0, id);
+    editTempItems.append(item);
+
+    if (!name.isEmpty()) {
+        auto* text = scene->addText(name);
+        QRectF bounds = text->boundingRect();
+        text->setPos(pos.x() - bounds.width()/2.0, pos.y() + r + 2);
+        text->setDefaultTextColor(QColor("#555"));
+        text->setZValue(12);
+        editTempItems.append(text);
+    }
+}
+
 void MapWidget::highlightPath(const QVector<int>& pathNodeIds, double animationDuration)
 {
     if (pathNodeIds.isEmpty()) {
         clearPathHighlight();
         return;
     }
-    
+
     // 清除旧的动画
     clearPathHighlight();
-    
+
     // 保存路径节点
     currentPathNodeIds = pathNodeIds;
     animationDurationMs = animationDuration * 1000.0;  // 转换为毫秒
     animationProgress = 0.0;
     animationStartTime = QDateTime::currentMSecsSinceEpoch();
-    
-    // 首先绘制静态的路径背景（浅蓝色，用于高亮）
+
+    // 绘制完整路径的高亮背景（逐段直线）
     QMap<int, Node> nodeMap;
     for(const auto& node : cachedNodes) {
         nodeMap.insert(node.id, node);
     }
-    
-    // 绘制完整路径的高亮背景
     for (int i = 0; i < pathNodeIds.size() - 1; ++i) {
         int u = pathNodeIds[i];
         int v = pathNodeIds[i + 1];
-        
         if (nodeMap.contains(u) && nodeMap.contains(v)) {
-            Node startNode = nodeMap[u];
-            Node endNode = nodeMap[v];
-            
-            // 绘制浅蓝色高亮线（宽度较粗）
-            QPen highlightPen(QColor(100, 180, 240, 200));  // 较浅的蓝色，带透明度
-            highlightPen.setWidth(6);
-            highlightPen.setCapStyle(Qt::RoundCap);
-            highlightPen.setJoinStyle(Qt::RoundJoin);
-            
-            auto highlightLine = scene->addLine(startNode.x, startNode.y, endNode.x, endNode.y, highlightPen);
-            highlightLine->setZValue(15);  // 在原路径上方
+            const Node& a = nodeMap[u];
+            const Node& b = nodeMap[v];
+            QPen pen(QColor(100, 180, 240, 200));  // 浅蓝
+            pen.setWidth(6);
+            pen.setJoinStyle(Qt::RoundJoin);
+            pen.setCapStyle(Qt::RoundCap);
+            auto line = scene->addLine(a.x, a.y, b.x, b.y, pen);
+            line->setZValue(15);
         }
     }
-    
+
     // 启动动画定时器
     animationTimer->start(16);  // 约60 FPS
 }
@@ -395,10 +476,11 @@ void MapWidget::onAnimationTick()
 
 void MapWidget::drawPathGrowthAnimation()
 {
-    // 首先删除之前的生长线（ZValue=20的所有项）
+    // 首先删除之前的生长线（ZValue=19/20 的所有项）
     auto items = scene->items();
     for (auto item : items) {
-        if (item->zValue() == 20) {
+        double z = item->zValue();
+        if (z == 20 || z == 19) {
             scene->removeItem(item);
             delete item;
         }
@@ -456,7 +538,7 @@ void MapWidget::drawPathGrowthAnimation()
         segmentProgress = 1.0;
     }
     
-    // 绘制从起点到当前位置的生长路径
+    // 绘制从起点到当前位置的生长路径（分段直线）
     if (currentSegment >= 0 && currentPathNodeIds.size() > currentSegment + 1) {
         Node startNode = nodeMap[currentPathNodeIds[0]];
         
@@ -485,7 +567,7 @@ void MapWidget::drawPathGrowthAnimation()
         // 绘制当前段的部分
         growthPath.lineTo(currentX, currentY);
         
-        // 使用更鲜艳的蓝色绘制生长线
+        // 使用更鲜艳的蓝色绘制前景生长线
         QPen growthPen(QColor(70, 150, 255));
         growthPen.setWidth(5);
         growthPen.setCapStyle(Qt::RoundCap);
@@ -499,27 +581,127 @@ void MapWidget::drawPathGrowthAnimation()
     this->viewport()->update();
 }
 
+QPen MapWidget::edgePenForType(int type) const
+{
+    QColor c(200,200,200);
+    int width = 3;
+    switch (type) {
+    case 0: c = QColor(180,180,180); width = 3; break;      // 普通道路
+    case 1: c = QColor(150,180,220); width = 4; break;      // 主干道
+    case 2: c = QColor(120,200,140); width = 3; break;      // 小径/绿道
+    case 3: c = QColor(220,160,120); width = 3; break;      // 楼内连线
+    default: c = QColor(200,200,200); width = 3; break;
+    }
+    QPen pen(c);
+    pen.setWidth(width);
+    pen.setJoinStyle(Qt::RoundJoin);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setCosmetic(true);
+    return pen;
+}
+
+// Catmull-Rom to Bezier conversion for smooth path
+QPainterPath MapWidget::buildSmoothPath(const QVector<QPointF>& pts) const
+{
+    QPainterPath path;
+    if (pts.isEmpty()) return path;
+    path.moveTo(pts[0]);
+
+    if (pts.size() == 2) {
+        path.lineTo(pts[1]);
+        return path;
+    }
+
+    // Tension parameter for Catmull-Rom (0.5 standard)
+    const double t = 0.5;
+    auto addSegment = [&](const QPointF& p0, const QPointF& p1, const QPointF& p2, const QPointF& p3){
+        // Control points derived from Catmull-Rom
+        QPointF c1 = p1 + (p2 - p0) * (t / 3.0);
+        QPointF c2 = p2 - (p3 - p1) * (t / 3.0);
+        path.cubicTo(c1, c2, p2);
+    };
+
+    // For endpoints, duplicate boundary points to compute controls
+    for (int i = 0; i < pts.size() - 1; ++i) {
+        QPointF p0 = (i == 0) ? pts[0] : pts[i-1];
+        QPointF p1 = pts[i];
+        QPointF p2 = pts[i+1];
+        QPointF p3 = (i+2 < pts.size()) ? pts[i+2] : pts[i+1];
+        // Build cubic segment from p1 to p2
+        QPointF c1 = p1 + (p2 - p0) * (t / 3.0);
+        QPointF c2 = p2 - (p3 - p1) * (t / 3.0);
+        path.cubicTo(c1, c2, p2);
+    }
+
+    return path;
+}
+
+QPainterPath MapWidget::buildPartialPathFromLength(const QPainterPath& fullPath, double length) const
+{
+    QPainterPath out;
+    if (fullPath.isEmpty() || length <= 0.0) return out;
+
+    // 采用折线近似逐段截取
+    double acc = 0.0;
+    bool started = false;
+    for (const QPolygonF& poly : fullPath.toSubpathPolygons()) {
+        if (poly.isEmpty()) continue;
+        QPointF prev = poly[0];
+        if (!started) { out.moveTo(prev); started = true; }
+        for (int i = 1; i < poly.size(); ++i) {
+            QPointF cur = poly[i];
+            double dx = cur.x() - prev.x();
+            double dy = cur.y() - prev.y();
+            double segLen = std::sqrt(dx*dx + dy*dy);
+            if (acc + segLen >= length) {
+                double remain = length - acc;
+                double ratio = (segLen > 1e-6) ? (remain / segLen) : 0.0;
+                QPointF cut(prev.x() + dx*ratio, prev.y() + dy*ratio);
+                out.lineTo(cut);
+                return out;
+            } else {
+                out.lineTo(cur);
+                acc += segLen;
+                prev = cur;
+            }
+        }
+    }
+    return out;
+}
+
 void MapWidget::clearPathHighlight()
 {
-    animationTimer->stop();
+    // 停止动画并重置进度
+    if (animationTimer && animationTimer->isActive()) animationTimer->stop();
     animationProgress = 0.0;
+
+    // 清除路径模型
     currentPathNodeIds.clear();
-    
+
+    // 移除旧的生长线
     if (pathGrowthLine) {
         scene->removeItem(pathGrowthLine);
         delete pathGrowthLine;
         pathGrowthLine = nullptr;
     }
-    
-    // 移除所有高亮线（Z值为15或20的项）
+
+    // 移除高亮路径项（ZValue 15/16/20 等）
     auto items = scene->items();
-    for (auto item : items) {
-        if (item->zValue() >= 15 && item->zValue() <= 20) {
-            scene->removeItem(item);
-            delete item;
+    for (auto it : items) {
+        double z = it->zValue();
+        if (z >= 15.0 && z <= 20.0) {
+            scene->removeItem(it);
+            delete it;
         }
     }
-    
+
+    // 清理记录的当前完整路径项
+    if (currentRouteItem) {
+        scene->removeItem(currentRouteItem);
+        delete currentRouteItem;
+        currentRouteItem = nullptr;
+    }
+
     this->viewport()->update();
 }
 

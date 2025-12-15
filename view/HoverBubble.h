@@ -1,5 +1,4 @@
-#ifndef HOVERBUBBLE_H
-#define HOVERBUBBLE_H
+#pragma once
 
 // QGraphicsObject is provided by the Qt Widgets module; use the module-qualified include
 // Module-qualified Qt includes
@@ -60,4 +59,4 @@ private:
     void recalcLayout();
 };
 
-#endif // HOVERBUBBLE_H
+ 

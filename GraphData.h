@@ -1,5 +1,4 @@
-#ifndef GRAPHDATA_H
-#define GRAPHDATA_H
+#pragma once
 
 #include <QString>
 #include <QVector>
@@ -32,4 +31,4 @@ struct Edge {
     }
 };
 
-#endif // GRAPHDATA_H
+ 

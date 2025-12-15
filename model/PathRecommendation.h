@@ -1,5 +1,4 @@
-#ifndef PATHRECOMMENDATION_H
-#define PATHRECOMMENDATION_H
+#pragma once
 
 #include <QVector>
 #include <QString>
@@ -38,4 +37,4 @@ struct PathRecommendation {
     }
 };
 
-#endif // PATHRECOMMENDATION_H
+ 

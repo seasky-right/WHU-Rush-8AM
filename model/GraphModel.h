@@ -1,5 +1,4 @@
-#ifndef GRAPHMODEL_H
-#define GRAPHMODEL_H
+#pragma once
 
 #include "../GraphData.h"
 #include "PathRecommendation.h"
@@ -55,4 +54,4 @@ private:
     double getEffectiveSpeed(double baseSpeed, const Edge& edge, WeightMode mode) const;
 };
 
-#endif // GRAPHMODEL_H
+ 

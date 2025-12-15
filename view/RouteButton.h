@@ -1,5 +1,4 @@
-#ifndef ROUTEBUTTON_H
-#define ROUTEBUTTON_H
+#pragma once
 
 // Module-qualified Qt includes
 #include <QtWidgets/QPushButton>
@@ -29,4 +28,4 @@ private:
     void updateStyle(bool isHovered);
 };
 
-#endif // ROUTEBUTTON_H
+ 

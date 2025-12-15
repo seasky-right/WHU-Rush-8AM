@@ -13,6 +13,7 @@ qt_add_executable(WHU-8am-Rush
     mainwindow.ui
     model/GraphModel.h model/GraphModel.cpp
     model/PathRecommendation.h
+    model/MapEditor.h model/MapEditor.cpp
     GraphData.h
     view/MapWidget.h view/MapWidget.cpp
     view/HoverBubble.h view/HoverBubble.cpp

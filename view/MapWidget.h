@@ -1,5 +1,4 @@
-#ifndef MAPWIDGET_H
-#define MAPWIDGET_H
+#pragma once
 
 // Qt module-qualified includes for clarity
 #include <QtWidgets/QGraphicsView>
@@ -20,6 +19,8 @@
 #include <QtCore/QPointF>
 #include <QtGui/QColor>
 #include "../GraphData.h"
+// Map data editor integration
+class MapEditor;
 
 class MapWidget : public QGraphicsView
 {
@@ -31,6 +32,13 @@ public:
     void setBackgroundImage(const QString& path);
     void setStartNode(int nodeId);
     void setEndNode(int nodeId);
+    // 编辑模式：用于采集地图数据（点击生成节点/边）
+    void setEditMode(bool enabled);
+    bool isEditMode() const { return editMode; }
+    MapEditor* getEditor() const { return mapEditor; }
+    // 编辑模式临时节点管理（供外部调用以添加可视节点）
+    void clearEditTempItems();
+    void addEditVisualNode(int id, const QString& name, const QPointF& pos, int type);
     
     // 路径高亮和动画接口
     void highlightPath(const QVector<int>& pathNodeIds, double animationDuration = 1.0);
@@ -38,6 +46,7 @@ public:
 
 signals:
     void nodeClicked(int nodeId, QString name, bool isLeftClick);
+    void editPointPicked(QPointF scenePos, bool ctrlPressed);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -85,6 +94,7 @@ private:
     // 路径动画相关
     QVector<int> currentPathNodeIds;
     QGraphicsLineItem* pathGrowthLine = nullptr;  // 生长中的路径线
+    QGraphicsPathItem* currentRouteItem = nullptr; // 当前完整路径项（平滑曲线）
     QTimer* animationTimer = nullptr;
     double animationProgress = 0.0;  // 0 到 1.0
     double animationDurationMs = 1000.0;  // 动画持续时间（毫秒）
@@ -92,6 +102,17 @@ private:
     
     // 清除路径高亮和动画（私有实现）
     void drawPathGrowthAnimation();
-};
 
-#endif // MAPWIDGET_H
+    // 辅助：根据类型返回边颜色/宽度
+    QPen edgePenForType(int type) const;
+    // 辅助：从点序列构建平滑路径（Catmull-Rom 转 Bezier）
+    QPainterPath buildSmoothPath(const QVector<QPointF>& pts) const;
+    // 辅助：按长度截取部分平滑路径，用于增长动画
+    QPainterPath buildPartialPathFromLength(const QPainterPath& fullPath, double length) const;
+
+    // 编辑模式
+    bool editMode = false;
+    MapEditor* mapEditor = nullptr;
+    // 临时编辑可视节点（包括幽灵节点）
+    QVector<QGraphicsItem*> editTempItems;
+};
