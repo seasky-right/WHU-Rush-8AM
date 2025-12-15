@@ -162,5 +162,8 @@ void MainWindow::onStartSearch()
     pathStr.chop(4);
 
     qDebug() << "计算成功！" << pathStr;
-    statusLabel->setText("✅ 规划成功！请查看控制台输出");
+    statusLabel->setText("✅ 规划成功！");
+    
+    // 显示路径高亮和生长动画（动画持续1秒）
+    mapWidget->highlightPath(pathIds, 1.0);
 }

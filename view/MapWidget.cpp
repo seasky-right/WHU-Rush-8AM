@@ -9,6 +9,8 @@
 #include <QPixmap>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QTimer>
+#include <QDateTime>
 
 MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
 {
@@ -17,6 +19,10 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     this->setRenderHint(QPainter::Antialiasing);
     this->setBackgroundBrush(QBrush(QColor(240, 240, 245)));
     this->setMouseTracking(true);
+    
+    // 初始化动画计时器
+    animationTimer = new QTimer(this);
+    connect(animationTimer, &QTimer::timeout, this, &MapWidget::onAnimationTick);
 }
 
 void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
@@ -207,3 +213,201 @@ void MapWidget::setStartNode(int nodeId) {
 
 void MapWidget::setEndNode(int nodeId) {
 }
+
+void MapWidget::highlightPath(const QVector<int>& pathNodeIds, double animationDuration)
+{
+    if (pathNodeIds.isEmpty()) {
+        clearPathHighlight();
+        return;
+    }
+    
+    // 清除旧的动画
+    clearPathHighlight();
+    
+    // 保存路径节点
+    currentPathNodeIds = pathNodeIds;
+    animationDurationMs = animationDuration * 1000.0;  // 转换为毫秒
+    animationProgress = 0.0;
+    animationStartTime = QDateTime::currentMSecsSinceEpoch();
+    
+    // 首先绘制静态的路径背景（浅蓝色，用于高亮）
+    QMap<int, Node> nodeMap;
+    for(const auto& node : cachedNodes) {
+        nodeMap.insert(node.id, node);
+    }
+    
+    // 绘制完整路径的高亮背景
+    for (int i = 0; i < pathNodeIds.size() - 1; ++i) {
+        int u = pathNodeIds[i];
+        int v = pathNodeIds[i + 1];
+        
+        if (nodeMap.contains(u) && nodeMap.contains(v)) {
+            Node startNode = nodeMap[u];
+            Node endNode = nodeMap[v];
+            
+            // 绘制浅蓝色高亮线（宽度较粗）
+            QPen highlightPen(QColor(100, 180, 240, 200));  // 较浅的蓝色，带透明度
+            highlightPen.setWidth(6);
+            highlightPen.setCapStyle(Qt::RoundCap);
+            highlightPen.setJoinStyle(Qt::RoundJoin);
+            
+            auto highlightLine = scene->addLine(startNode.x, startNode.y, endNode.x, endNode.y, highlightPen);
+            highlightLine->setZValue(15);  // 在原路径上方
+        }
+    }
+    
+    // 启动动画定时器
+    animationTimer->start(16);  // 约60 FPS
+}
+
+void MapWidget::onAnimationTick()
+{
+    if (currentPathNodeIds.isEmpty()) {
+        animationTimer->stop();
+        return;
+    }
+    
+    // 计算动画进度
+    qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - animationStartTime;
+    animationProgress = std::min(1.0, elapsed / animationDurationMs);
+    
+    // 如果动画完成，停止定时器
+    if (animationProgress >= 1.0) {
+        animationTimer->stop();
+        animationProgress = 1.0;
+    }
+    
+    // 重绘路径生长动画
+    drawPathGrowthAnimation();
+}
+
+void MapWidget::drawPathGrowthAnimation()
+{
+    // 首先删除之前的生长线（ZValue=20的所有项）
+    auto items = scene->items();
+    for (auto item : items) {
+        if (item->zValue() == 20) {
+            scene->removeItem(item);
+            delete item;
+        }
+    }
+    
+    QMap<int, Node> nodeMap;
+    for(const auto& node : cachedNodes) {
+        nodeMap.insert(node.id, node);
+    }
+    
+    // 根据动画进度计算应该绘制到哪里
+    double totalDistance = 0.0;
+    QVector<double> segmentDistances;
+    
+    // 首先计算所有路径段的距离
+    for (int i = 0; i < currentPathNodeIds.size() - 1; ++i) {
+        int u = currentPathNodeIds[i];
+        int v = currentPathNodeIds[i + 1];
+        
+        if (nodeMap.contains(u) && nodeMap.contains(v)) {
+            Node startNode = nodeMap[u];
+            Node endNode = nodeMap[v];
+            
+            double dx = endNode.x - startNode.x;
+            double dy = endNode.y - startNode.y;
+            double dist = std::sqrt(dx * dx + dy * dy);
+            
+            segmentDistances.append(dist);
+            totalDistance += dist;
+        }
+    }
+    
+    if (totalDistance <= 0.0 || segmentDistances.isEmpty()) {
+        return;
+    }
+    
+    // 计算当前应该绘制到的距离
+    double currentDistance = animationProgress * totalDistance;
+    double accumulatedDistance = 0.0;
+    int currentSegment = -1;
+    double segmentProgress = 0.0;
+    
+    // 找到当前在哪一段
+    for (int i = 0; i < segmentDistances.size(); ++i) {
+        if (accumulatedDistance + segmentDistances[i] >= currentDistance) {
+            currentSegment = i;
+            segmentProgress = (currentDistance - accumulatedDistance) / segmentDistances[i];
+            break;
+        }
+        accumulatedDistance += segmentDistances[i];
+    }
+    
+    if (currentSegment < 0) {
+        currentSegment = segmentDistances.size() - 1;
+        segmentProgress = 1.0;
+    }
+    
+    // 绘制从起点到当前位置的生长路径
+    if (currentSegment >= 0 && currentPathNodeIds.size() > currentSegment + 1) {
+        Node startNode = nodeMap[currentPathNodeIds[0]];
+        
+        // 计算当前段的结束点（部分）
+        Node currentSegmentStart = nodeMap[currentPathNodeIds[currentSegment]];
+        Node currentSegmentEnd = nodeMap[currentPathNodeIds[currentSegment + 1]];
+        
+        double dx = currentSegmentEnd.x - currentSegmentStart.x;
+        double dy = currentSegmentEnd.y - currentSegmentStart.y;
+        
+        double currentX = currentSegmentStart.x + dx * segmentProgress;
+        double currentY = currentSegmentStart.y + dy * segmentProgress;
+        
+        // 构造从起点到当前位置的路径
+        QPainterPath growthPath;
+        growthPath.moveTo(startNode.x, startNode.y);
+        
+        // 绘制所有已完成的路径段
+        for (int i = 1; i <= currentSegment; ++i) {
+            if (nodeMap.contains(currentPathNodeIds[i])) {
+                Node segNode = nodeMap[currentPathNodeIds[i]];
+                growthPath.lineTo(segNode.x, segNode.y);
+            }
+        }
+        
+        // 绘制当前段的部分
+        growthPath.lineTo(currentX, currentY);
+        
+        // 使用更鲜艳的蓝色绘制生长线
+        QPen growthPen(QColor(70, 150, 255));
+        growthPen.setWidth(5);
+        growthPen.setCapStyle(Qt::RoundCap);
+        growthPen.setJoinStyle(Qt::RoundJoin);
+        
+        auto pathItem = scene->addPath(growthPath, growthPen);
+        pathItem->setZValue(20);
+    }
+    
+    // 触发重绘
+    this->viewport()->update();
+}
+
+void MapWidget::clearPathHighlight()
+{
+    animationTimer->stop();
+    animationProgress = 0.0;
+    currentPathNodeIds.clear();
+    
+    if (pathGrowthLine) {
+        scene->removeItem(pathGrowthLine);
+        delete pathGrowthLine;
+        pathGrowthLine = nullptr;
+    }
+    
+    // 移除所有高亮线（Z值为15或20的项）
+    auto items = scene->items();
+    for (auto item : items) {
+        if (item->zValue() >= 15 && item->zValue() <= 20) {
+            scene->removeItem(item);
+            delete item;
+        }
+    }
+    
+    this->viewport()->update();
+}
+
