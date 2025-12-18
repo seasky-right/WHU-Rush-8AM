@@ -16,7 +16,6 @@ MapEditor::MapEditor(QObject* parent)
 }
 
 void MapEditor::handleMapClick(QPointF scenePos, bool isCtrlPressed) {
-    // 兼容旧入口：只负责快速添加，使用默认描述/分类
     int connectFrom = m_lastConnectedId;
     createNode(QString(), scenePos, isCtrlPressed ? 0 : 9,
                QStringLiteral("无"), QStringLiteral("None"),
@@ -29,7 +28,7 @@ void MapEditor::resetConnection() {
 
 int MapEditor::createNode(const QString& name,
                    const QPointF& pos,
-                   int type,
+                   int type, // 0=Visible, 9=Ghost (这里仍接收 int，内部转 enum)
                    const QString& desc,
                    const QString& category,
                    int connectFromId,
@@ -39,6 +38,8 @@ int MapEditor::createNode(const QString& name,
 {
     int id = -1;
     QString finalName = name;
+    
+    // 逻辑判断使用 int 比较
     if (type == 9) {
         id = m_roadIdCounter++;
         if (finalName.trimmed().isEmpty()) {
@@ -65,7 +66,7 @@ int MapEditor::createNode(const QString& name,
 void MapEditor::appendNode(int id, const QString& name, const QPointF& pos,
                            int type, const QString& desc, const QString& category) {
     // Format: id, name, x, y, z, type, description, category
-    // Defaults: z=30, description="无", category="None"
+    // Defaults: z=30
     const double z = 30.0;
 
     QFile file(QStringLiteral("nodes_draft.txt"));
@@ -81,9 +82,9 @@ void MapEditor::appendNode(int id, const QString& name, const QPointF& pos,
         << pos.x() << ", "
         << pos.y() << ", "
         << z << ", "
-        << type << ", "
+        << type << ", " // 这里写入 int (0 或 9)，符合 GraphModel 解析预期
         << desc << ", "
-        << category << "\n";
+        << category << "\n"; // 写入字符串 (如 "Dorm")
 
     file.close();
 }
@@ -91,9 +92,6 @@ void MapEditor::appendNode(int id, const QString& name, const QPointF& pos,
 void MapEditor::appendEdge(int u, int v, double distance, int type,
                            const QString& isSlope, const QString& name,
                            const QString& desc) {
-    // Format: u, v, distance, type, is_slope, name, description
-    // Defaults: distance=0, type=0, is_slope="false", name="自动道路"
-
     QFile file(QStringLiteral("edges_draft.txt"));
     if (!file.open(QIODevice::Append | QIODevice::Text)) {
         qWarning() << "Failed to open edges_draft.txt for append";

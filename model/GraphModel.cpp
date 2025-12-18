@@ -67,9 +67,17 @@ void GraphModel::parseNodeLine(const QString& line) {
     node.x = parts[2].trimmed().toDouble();
     node.y = parts[3].trimmed().toDouble();
     node.z = parts[4].trimmed().toDouble();
-    node.type = parts[5].trimmed().toInt();
+    
+    // Enum 转换: NodeType
+    int rawType = parts[5].trimmed().toInt();
+    node.type = (rawType == 9) ? NodeType::Ghost : NodeType::Visible;
+    
     node.description = parts[6].trimmed();
-    node.category = parts[7].trimmed();
+    
+    // Enum 转换: NodeCategory
+    QString catStr = parts[7].trimmed();
+    node.category = Node::stringToCategory(catStr);
+    
     nodesMap.insert(node.id, node);
 }
 
@@ -80,14 +88,15 @@ void GraphModel::parseEdgeLine(const QString& line) {
     edge.u = parts[0].trimmed().toInt();
     edge.v = parts[1].trimmed().toInt();
     edge.distance = parts[2].trimmed().toDouble();
-    edge.type = parts[3].trimmed().toInt();
+    
+    // Enum 转换: EdgeType
+    int rawType = parts[3].trimmed().toInt();
+    edge.type = static_cast<EdgeType>(rawType); // 简单强转，假设文件数据合法
+    
     edge.isSlope = (parts[4].trimmed().toInt() == 1);
     edge.name = parts[5].trimmed();
     edge.description = parts[6].trimmed();
     
-    // 计算坡度：如果有高度差信息，计算坡度
-    // 这里简单处理：如果是坡道（isSlope=true），坡度设为 0.08（8%）
-    // 否则设为0
     if (edge.isSlope) {
         edge.slope = 0.08;  // 假设坡道的坡度为8%
     } else {
@@ -104,7 +113,6 @@ void GraphModel::buildAdjacencyList() {
         Edge revEdge = edge;
         revEdge.u = edge.v;
         revEdge.v = edge.u;
-        // 反向边的坡度相反
         revEdge.slope = -edge.slope;
         adj[edge.v].append(revEdge);
     }
@@ -114,7 +122,6 @@ QVector<int> GraphModel::findPath(int startId, int endId) {
     return findPathWithMode(startId, endId, WeightMode::DISTANCE);
 }
 
-// 获取边对象
 const Edge* GraphModel::findEdge(int u, int v) const {
     if (!adj.contains(u)) return nullptr;
     for (const auto& edge : adj.value(u)) {
@@ -125,33 +132,29 @@ const Edge* GraphModel::findEdge(int u, int v) const {
     return nullptr;
 }
 
-// 获取边权重
 double GraphModel::getEdgeWeight(const Edge& edge, WeightMode mode) const {
     switch (mode) {
         case WeightMode::DISTANCE:
             return edge.distance;
             
         case WeightMode::TIME: {
-            // 极限冲刺：基于时间，考虑坡度对速度的影响
-            double baseSpeed = SPEED_WALK;  // 默认步行
+            double baseSpeed = SPEED_WALK;
             double effectiveSpeed = getEffectiveSpeed(baseSpeed, edge, mode);
             double duration = edge.distance / effectiveSpeed;
             return duration;
         }
         
         case WeightMode::COST: {
-            // 懒人养生：基于心理代价，反感坡度和楼梯
             double cost = edge.distance;
-            
-            // 如果是楼梯（type=2或其他标记），增加权重
-            if (edge.type == 2) {  // 假设 type=2 代表楼梯
-                cost *= STAIR_COST_MULTIPLIER;
+            // 楼梯或特殊路径
+            if (edge.type == EdgeType::Path && edge.isSlope) { 
+                // 假设 EdgeType::Path 且坡度大可能是楼梯，或者根据实际数据约定
+                // 这里为了演示，假设 EdgeType::Path 包含楼梯
+                cost *= STAIR_COST_MULTIPLIER; 
             }
-            // 如果是上坡，增加权重
-            else if (edge.slope > SLOPE_THRESHOLD) {
+            if (edge.slope > SLOPE_THRESHOLD) {
                 cost *= UPHILL_COST_MULTIPLIER;
             }
-            
             return cost;
         }
         
@@ -160,28 +163,24 @@ double GraphModel::getEdgeWeight(const Edge& edge, WeightMode mode) const {
     }
 }
 
-// 计算有效速度（考虑坡度和交通工具）
 double GraphModel::getEffectiveSpeed(double baseSpeed, const Edge& edge, WeightMode mode) const {
     if (mode != WeightMode::TIME) {
         return baseSpeed;
     }
     
-    // 如果是楼梯，无法使用基速度计算（简化处理）
-    if (edge.type == 2) {
-        return baseSpeed * 0.5;  // 楼梯速度减半
+    // 如果是楼梯/小径 (EdgeType::Path)，速度减半
+    if (edge.type == EdgeType::Path) {
+        return baseSpeed * 0.5;
     }
     
-    // 如果坡度为0或非常小，使用基础速度
     if (std::abs(edge.slope) <= 0.01) {
         return baseSpeed;
     }
     
-    // 下坡：加速
     if (edge.slope < -0.01) {
         return baseSpeed * DOWNHILL_MULTIPLIER;
     }
     
-    // 上坡：减速（这里以步行为例）
     if (edge.slope > SLOPE_THRESHOLD) {
         return baseSpeed * UPHILL_MULTIPLIER_WALK;
     }
@@ -189,7 +188,6 @@ double GraphModel::getEffectiveSpeed(double baseSpeed, const Edge& edge, WeightM
     return baseSpeed;
 }
 
-// 带权重模式的Dijkstra寻路
 QVector<int> GraphModel::findPathWithMode(int startId, int endId, WeightMode mode) {
     QVector<int> path;
     if (!nodesMap.contains(startId) || !nodesMap.contains(endId)) return path;
@@ -236,14 +234,11 @@ QVector<int> GraphModel::findPathWithMode(int startId, int endId, WeightMode mod
     return path;
 }
 
-// 计算路径距离
 double GraphModel::calculateDistance(const QVector<int>& pathNodeIds) const {
     double total = 0.0;
     for (int i = 0; i < pathNodeIds.size() - 1; ++i) {
         int u = pathNodeIds[i];
         int v = pathNodeIds[i + 1];
-        
-        // 在邻接表中找到这条边
         if (adj.contains(u)) {
             for (const auto& edge : adj.value(u)) {
                 if (edge.v == v) {
@@ -256,14 +251,11 @@ double GraphModel::calculateDistance(const QVector<int>& pathNodeIds) const {
     return total;
 }
 
-// 计算路径耗时
 double GraphModel::calculateDuration(const QVector<int>& pathNodeIds) const {
     double total = 0.0;
     for (int i = 0; i < pathNodeIds.size() - 1; ++i) {
         int u = pathNodeIds[i];
         int v = pathNodeIds[i + 1];
-        
-        // 在邻接表中找到这条边
         if (adj.contains(u)) {
             for (const auto& edge : adj.value(u)) {
                 if (edge.v == v) {
@@ -277,14 +269,11 @@ double GraphModel::calculateDuration(const QVector<int>& pathNodeIds) const {
     return total;
 }
 
-// 计算路径心理代价
 double GraphModel::calculateCost(const QVector<int>& pathNodeIds) const {
     double total = 0.0;
     for (int i = 0; i < pathNodeIds.size() - 1; ++i) {
         int u = pathNodeIds[i];
         int v = pathNodeIds[i + 1];
-        
-        // 在邻接表中找到这条边
         if (adj.contains(u)) {
             for (const auto& edge : adj.value(u)) {
                 if (edge.v == v) {
@@ -298,26 +287,21 @@ double GraphModel::calculateCost(const QVector<int>& pathNodeIds) const {
     return total;
 }
 
-// 多策略推荐路径
 QVector<PathRecommendation> GraphModel::recommendPaths(int startId, int endId) {
     QVector<PathRecommendation> recommendations;
     
-    // 计算三种不同权重的路径
     QVector<int> fastestPath = findPathWithMode(startId, endId, WeightMode::TIME);
     QVector<int> easiestPath = findPathWithMode(startId, endId, WeightMode::COST);
     QVector<int> shortestPath = findPathWithMode(startId, endId, WeightMode::DISTANCE);
     
-    if (fastestPath.isEmpty()) return recommendations;  // 无法寻路
+    if (fastestPath.isEmpty()) return recommendations;
     
-    // 去重：如果路径相同则不重复添加
     QVector<QVector<int>> uniquePaths;
-    QString routeLabels[] = {"路线1", "路线2", "路线3"};
     QString typeNames[] = {"极限冲刺", "懒人养生", "经济适用"};
     RouteType types[] = {RouteType::FASTEST, RouteType::EASIEST, RouteType::SHORTEST};
     QVector<int> paths[] = {fastestPath, easiestPath, shortestPath};
     
     for (int i = 0; i < 3; ++i) {
-        // 检查这条路径是否已经存在
         bool isDuplicate = false;
         for (const auto& existing : uniquePaths) {
             if (existing == paths[i]) {
