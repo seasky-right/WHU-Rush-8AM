@@ -5,53 +5,75 @@
 #include <QMap>
 #include <QString>
 #include <QVector>
+#include <QStack> // 用于撤销操作
 
-// 权重类型枚举
-enum class WeightMode {
-    DISTANCE,   // 经济适用：仅计算距离
-    TIME,       // 极限冲刺：计算时间（考虑坡度加速/减速）
-    COST        // 懒人养生：计算心理代价（反感坡度）
+enum class WeightMode { DISTANCE, TIME, COST };
+
+// 用于撤销操作的简单的动作记录
+struct HistoryAction {
+    enum Type { AddNode, DeleteNode, AddEdge, DeleteEdge, MoveNode };
+    Type type;
+    // 数据备份
+    Node nodeData;
+    Edge edgeData;
 };
 
 class GraphModel {
 public:
     GraphModel();
 
-    // 加载数据
+    // 加载与保存
     bool loadData(const QString& nodesPath, const QString& edgesPath);
+    bool saveData(const QString& nodesPath, const QString& edgesPath);
 
-    // 核心寻路（单一权重）
+    // 基础查询
+    const Edge* findEdge(int u, int v) const;
+    Node* getNodePtr(int id); // 获取可修改的指针
+    Node getNode(int id);
+    QVector<Node> getAllNodes() const;
+    QVector<Edge> getAllEdges() const;
+
+    // --- 编辑器 CRUD 接口 ---
+    // 添加节点，返回新ID
+    int addNode(double x, double y, NodeType type);
+    // 删除节点（会自动删除关联边）
+    void deleteNode(int id);
+    // 更新节点信息
+    void updateNode(const Node& n);
+    
+    // 添加/更新边 (如果已存在则更新，不存在则添加)
+    void addOrUpdateEdge(const Edge& edge);
+    // 删除边
+    void deleteEdge(int u, int v);
+    
+    // 撤销功能
+    void pushAction(const HistoryAction& action);
+    void undo();
+    bool canUndo() const;
+
+    // 寻路与计算 (保持不变)
     QVector<int> findPath(int startId, int endId);
-    QVector<int> findPathWithMode(int startId, int endId, WeightMode mode);
-
-    // 多策略推荐（返回最多3条不同路线）
     QVector<PathRecommendation> recommendPaths(int startId, int endId);
-
-    // 计算路径的各种指标
     double calculateDistance(const QVector<int>& pathNodeIds) const;
     double calculateDuration(const QVector<int>& pathNodeIds) const;
     double calculateCost(const QVector<int>& pathNodeIds) const;
-    
-    // 获取边的信息
-    const Edge* findEdge(int u, int v) const;
     double getEdgeWeight(const Edge& edge, WeightMode mode) const;
-
-    // Getters
-    QVector<Node> getAllNodes() const;
-    QVector<Edge> getAllEdges() const;
-    Node getNode(int id);
 
 private:
     QMap<int, Node> nodesMap;
     QVector<Edge> edgesList;
     QMap<int, QVector<Edge>> adj; // 邻接表
+    
+    // ID 计数器
+    int maxBuildingId = 100;
+    int maxRoadId = 900;
+    
+    // 撤销栈
+    QStack<HistoryAction> undoStack;
 
     void parseNodeLine(const QString& line);
     void parseEdgeLine(const QString& line);
     void buildAdjacencyList();
-
-    // 物理计算函数
     double getEffectiveSpeed(double baseSpeed, const Edge& edge, WeightMode mode) const;
+    QVector<int> findPathWithMode(int startId, int endId, WeightMode mode);
 };
-
- 

@@ -1,371 +1,325 @@
 #include "MainWindow.h"
-// Module-qualified Qt includes
-#include <QtWidgets/QHBoxLayout>
-#include <QtWidgets/QVBoxLayout>
-#include <QtWidgets/QGroupBox>
 #include <QtWidgets/QMessageBox>
-#include <QtCore/QDebug>
-#include <QtCore/QTimer>
-#include <QtCore/QDir>
 #include <QtCore/QCoreApplication>
-#include <QtCore/QFileInfo>
-#include <QtWidgets/QLabel>
-#include <QtWidgets/QLineEdit>
-#include <QtWidgets/QPushButton>
-#include <QtWidgets/QScrollArea>
-#include <QtWidgets/QLayoutItem>
-#include <QtWidgets/QSizePolicy>
-#include <QtWidgets/QComboBox>
-#include "../model/MapEditor.h"
+#include <cmath>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    // 1. 基础设置
-    this->setWindowTitle("WHU Morning Rush - 早八冲锋号");
-    this->resize(1400, 800);
-
-    // 2. 初始化核心逻辑
     model = new GraphModel();
     mapWidget = new MapWidget(this);
 
-    // 3. 构建界面布局
     setupUi();
 
-    // 4. 连接信号与槽
-    // 当地图被点击 -> 触发 onMapNodeClicked
-    connect(mapWidget, &MapWidget::nodeClicked, this, &MainWindow::onMapNodeClicked);
-    connect(mapWidget, &MapWidget::editPointPicked, this, &MainWindow::onEditPointPicked);
+    // 信号连接
+    connect(mapWidget, &MapWidget::nodeEditClicked, this, &MainWindow::onNodeClicked);
+    connect(mapWidget, &MapWidget::emptySpaceClicked, this, &MainWindow::onEmptySpaceClicked);
+    connect(mapWidget, &MapWidget::edgeConnectionRequested, this, &MainWindow::onEdgeConnectionRequested);
+    connect(mapWidget, &MapWidget::nodeMoved, this, &MainWindow::onNodeMoved);
+    connect(mapWidget, &MapWidget::undoRequested, this, &MainWindow::onUndoRequested);
 
-    // 当按钮被点击 -> 触发 onStartSearch
-    connect(searchBtn, &QPushButton::clicked, this, &MainWindow::onStartSearch);
-
-    // 5. 延时加载数据
-    QTimer::singleShot(0, this, [this](){
-        bool success = false;
-
-        // 尝试资源路径 -> 可执行文件相对的 ./Data -> 应用程序目录下的 Data
-        QString appDir = QCoreApplication::applicationDirPath();
-        QStringList tryPairs = {
-            ":/nodes.txt|:/edges.txt",
-            "./Data/nodes.txt|./Data/edges.txt",
-            appDir + "/Data/nodes.txt|" + appDir + "/Data/edges.txt"
-        };
-
-        for (const QString &pair : tryPairs) {
-            QStringList parts = pair.split('|');
-            if (parts.size() != 2) continue;
-            if (model->loadData(parts[0], parts[1])) {
-                success = true;
-                statusLabel->setText("数据加载成功： " + parts[0]);
-                break;
-            }
-        }
-
-        if (success) {
-            mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
-
-            // 尝试加载背景图片（优先项目 ./Data，然后应用程序目录）
-            QString bg1 = "./Data/map.png";
-            QString bg2 = appDir + "/Data/map.png";
-            QString bgRes = ":/map.png";
-
-            if (QFileInfo::exists(bg1)) mapWidget->setBackgroundImage(bg1);
-            else if (QFileInfo::exists(bg2)) mapWidget->setBackgroundImage(bg2);
-            else if (QFileInfo::exists(bgRes)) mapWidget->setBackgroundImage(bgRes);
-        } else {
-            statusLabel->setText("❌ 数据加载失败！");
-            QMessageBox::critical(this, "严重错误",
-                                  "找不到数据文件！\n\n"
-                                  "请确认 'Data' 文件夹是否位于可执行文件所在目录或工程根目录：\n" + QDir::currentPath());
-        }
-    });
-}
-
-MainWindow::~MainWindow()
-{
-    delete model;
-}
-
-void MainWindow::setupUi()
-{
-    QWidget* centralWidget = new QWidget(this);
-    this->setCentralWidget(centralWidget);
-
-    // 总布局：水平 (左边栏 | 右地图)
-    QHBoxLayout* mainLayout = new QHBoxLayout(centralWidget);
-
-    // --- 左侧控制栏 ---
-    QGroupBox* controlPanel = new QGroupBox("通勤控制台");
-    controlPanel->setFixedWidth(350);
-    QVBoxLayout* panelLayout = new QVBoxLayout(controlPanel);
-
-    // 起点
-    panelLayout->addWidget(new QLabel("起点 (左键点击地图):"));
-    startEdit = new QLineEdit();
-    startEdit->setPlaceholderText("请选择起点...");
-    startEdit->setReadOnly(true);
-    panelLayout->addWidget(startEdit);
-
-    // 终点
-    panelLayout->addWidget(new QLabel("终点 (右键点击地图):"));
-    endEdit = new QLineEdit();
-    endEdit->setPlaceholderText("请选择终点...");
-    endEdit->setReadOnly(true);
-    panelLayout->addWidget(endEdit);
-
-    // 按钮
-    panelLayout->addSpacing(20);
-    searchBtn = new QPushButton("🚀 开始推荐");
-    searchBtn->setStyleSheet("background-color: #2ECC71; color: white; font-weight: bold; padding: 10px; border-radius: 5px;");
-    panelLayout->addWidget(searchBtn);
-
-    // 编辑模式开关
-    editModeCheck = new QCheckBox("🛠️ 地图编辑模式 (Ctrl=建筑, 左键；右键=抬笔)");
-    panelLayout->addWidget(editModeCheck);
-    connect(editModeCheck, &QCheckBox::toggled, this, [this](bool on){
-        mapWidget->setEditMode(on);
-        statusLabel->setText(on ? "编辑模式已开启：左键添加，右键抬笔" : "编辑模式已关闭");
-    });
-
-    // 编辑器表单
-    setupEditorPanel(panelLayout);
-
-    // 分隔线
-    panelLayout->addSpacing(20);
-    
-    // 路线推荐面板
-    QLabel* routeLabel = new QLabel("推荐路线:");
-    routeLabel->setStyleSheet("font-weight: bold; font-size: 12px;");
-    panelLayout->addWidget(routeLabel);
-    
-    // 创建滚动区域用于显示路线按钮
-    routeScrollArea = new QScrollArea();
-    routeScrollArea->setWidgetResizable(true);
-    routeScrollArea->setStyleSheet("QScrollArea { border: 1px solid #D0D0D0; border-radius: 3px; }");
-    routeScrollArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    
-    routePanelWidget = new QWidget();
-    routePanelWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    routePanelLayout = new QVBoxLayout(routePanelWidget);
-    routePanelLayout->setContentsMargins(5, 5, 5, 5);
-    routePanelLayout->setSpacing(8);
-    routePanelLayout->setAlignment(Qt::AlignTop);
-    routePanelLayout->addStretch();
-    
-    routeScrollArea->setWidget(routePanelWidget);
-    panelLayout->addWidget(routeScrollArea, 1);  // 给予伸缩空间
-
-    // 状态栏
-    panelLayout->addSpacing(10);
-    statusLabel = new QLabel("就绪");
-    statusLabel->setStyleSheet("color: gray; font-size: 10px;");
-    statusLabel->setWordWrap(true);
-    panelLayout->addWidget(statusLabel);
-
-    // --- 添加到主布局 ---
-    mainLayout->addWidget(controlPanel);
-    mainLayout->addWidget(mapWidget, 1);  // mapWidget 占据剩余空间
-}
-
-void MainWindow::onMapNodeClicked(int nodeId, QString name, bool isLeftClick)
-{
-    if (isLeftClick) {
-        startEdit->setText(name);
-        currentStartId = nodeId;
-        statusLabel->setText("已设置起点: " + name);
-    } else {
-        endEdit->setText(name);
-        currentEndId = nodeId;
-        statusLabel->setText("已设置终点: " + name);
+    // 加载数据
+    QString appDir = QCoreApplication::applicationDirPath();
+    if (model->loadData(appDir + "/Data/nodes.txt", appDir + "/Data/edges.txt")) {
+        refreshMap();
+        mapWidget->setBackgroundImage(appDir + "/Data/map.png");
     }
 }
 
-void MainWindow::onStartSearch()
-{
-    if (currentStartId == -1 || currentEndId == -1) {
-        QMessageBox::warning(this, "提示", "请先在地图上选择起点和终点！");
-        return;
-    }
+MainWindow::~MainWindow() { delete model; }
 
-    statusLabel->setText("正在计算路线推荐...");
-    qDebug() << "开始计算多策略推荐路线...";
+void MainWindow::setupUi() {
+    QWidget* central = new QWidget(this);
+    setCentralWidget(central);
+    QHBoxLayout* mainLayout = new QHBoxLayout(central);
 
-    // 获取三条不同权重的路线
-    QVector<PathRecommendation> recommendations = model->recommendPaths(currentStartId, currentEndId);
-
-    if (recommendations.isEmpty()) {
-        statusLabel->setText("❌ 无法找到可行路线！");
-        QMessageBox::warning(this, "提示", "起点和终点之间没有可连通的路径！");
-        return;
-    }
-
-    qDebug() << "找到" << recommendations.size() << "条推荐路线";
+    // --- 左侧栏 ---
+    QVBoxLayout* leftLayout = new QVBoxLayout();
+    QGroupBox* modeBox = new QGroupBox("编辑器模式");
+    QVBoxLayout* modeLayout = new QVBoxLayout(modeBox);
     
-    // 显示推荐路线
-    displayRouteRecommendations(recommendations);
+    modeGroup = new QButtonGroup(this);
+    QRadioButton* rbView = new QRadioButton("浏览模式");
+    QRadioButton* rbEdge = new QRadioButton("连边模式");
+    QRadioButton* rbBuild = new QRadioButton("新建筑物");
+    QRadioButton* rbGhost = new QRadioButton("新幽灵节点");
     
-    statusLabel->setText(QString("✅ 找到 %1 条推荐路线，请选择！").arg(recommendations.size()));
+    modeGroup->addButton(rbView, 0);
+    modeGroup->addButton(rbEdge, 1);
+    modeGroup->addButton(rbBuild, 2);
+    modeGroup->addButton(rbGhost, 3);
+    rbView->setChecked(true);
+    
+    modeLayout->addWidget(rbView);
+    modeLayout->addWidget(rbEdge);
+    modeLayout->addWidget(rbBuild);
+    modeLayout->addWidget(rbGhost);
+    
+    connect(modeGroup, &QButtonGroup::idClicked, this, &MainWindow::onModeChanged);
+    
+    leftLayout->addWidget(modeBox);
+    leftLayout->addStretch();
+    
+    saveAllBtn = new QPushButton("💾 保存所有修改");
+    saveAllBtn->setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold; padding: 10px;");
+    connect(saveAllBtn, &QPushButton::clicked, this, &MainWindow::onSaveAll);
+    leftLayout->addWidget(saveAllBtn);
+
+    statusLabel = new QLabel("就绪 (中键拖动地图)");
+    leftLayout->addWidget(statusLabel);
+
+    // --- 右侧栏 (Stacked) ---
+    setupRightPanel();
+
+    // 布局组合
+    QWidget* leftContainer = new QWidget();
+    leftContainer->setLayout(leftLayout);
+    leftContainer->setFixedWidth(200);
+
+    mainLayout->addWidget(leftContainer);
+    mainLayout->addWidget(mapWidget, 1);
+    mainLayout->addWidget(rightPanelStack);
 }
 
-void MainWindow::displayRouteRecommendations(const QVector<PathRecommendation>& recommendations)
-{
-    clearRoutePanel();
-
-    currentRecommendations = recommendations;
-    routeButtons.clear();
+void MainWindow::setupRightPanel() {
+    rightPanelStack = new QStackedWidget();
+    rightPanelStack->setFixedWidth(250);
     
-    // 创建每个路线的按钮
-    for (int i = 0; i < recommendations.size(); ++i) {
-        RouteButton* btn = new RouteButton(recommendations[i]);
-        routeButtons.append(btn);
+    // 0. 空白页
+    emptyPanel = new QWidget();
+    rightPanelStack->addWidget(emptyPanel);
 
-        // 添加按钮到面板
-        routePanelLayout->addWidget(btn);
-        
-        // 连接按钮的点击事件
-        connect(btn, &QPushButton::clicked, this, [this, i]() {
-            onRouteButtonClicked(i);
-        });
-        
-        // 连接悬停事件
-        connect(btn, &RouteButton::routeHovered, this, &MainWindow::onRouteHovered);
-        connect(btn, &RouteButton::routeUnhovered, this, &MainWindow::onRouteUnhovered);
-    }
+    // 1. 节点属性页
+    nodePropPanel = new QWidget();
+    QVBoxLayout* npLayout = new QVBoxLayout(nodePropPanel);
+    QGroupBox* npBox = new QGroupBox("节点属性");
+    QVBoxLayout* form = new QVBoxLayout(npBox);
     
-    // 重新添加stretch
-    routePanelLayout->addStretch();
-}
-
-void MainWindow::clearRoutePanel()
-{
-    // 清空布局中的所有项目（按钮和占位）
-    while (routePanelLayout->count() > 0) {
-        QLayoutItem* item = routePanelLayout->takeAt(0);
-        if (QWidget* w = item->widget()) {
-            w->deleteLater();
-        }
-        delete item;
-    }
-    routeButtons.clear();
-    currentRecommendations.clear();
-}
-
-void MainWindow::onRouteButtonClicked(int routeIndex)
-{
-    if (routeIndex < 0 || routeIndex >= currentRecommendations.size()) {
-        return;
-    }
-    
-    const PathRecommendation& rec = currentRecommendations[routeIndex];
-    qDebug() << "用户选择了路线:" << rec.typeName;
-    
-    // 直接使用高亮并启动生长动画（原版本行为）
-    mapWidget->highlightPath(rec.pathNodeIds, 1.0);
-    
-    statusLabel->setText(QString("已选择: %1 (%2) | 距离: %3m | 耗时: %4s")
-        .arg(rec.routeLabel)
-        .arg(rec.typeName)
-        .arg(static_cast<int>(rec.distance))
-        .arg(static_cast<int>(rec.duration)));
-}
-
-void MainWindow::onRouteHovered(const PathRecommendation& recommendation)
-{
-    // 当鼠标悬停在某条路线上时，显示预览动画
-    qDebug() << "悬停在路线:" << recommendation.typeName;
-    mapWidget->highlightPath(recommendation.pathNodeIds, 0.8);  // 预览时间稍短
-}
-
-void MainWindow::onRouteUnhovered()
-{
-    // 当鼠标离开时，清除预览
-    qDebug() << "鼠标离开路线";
-    mapWidget->clearPathHighlight();
-}
-
-// ------------------- 编辑模式 -------------------
-void MainWindow::setupEditorPanel(QVBoxLayout* panelLayout)
-{
-    QGroupBox* editorBox = new QGroupBox("地图编辑器");
-    QVBoxLayout* v = new QVBoxLayout(editorBox);
-
     nodeCoordLabel = new QLabel("坐标: -");
-    v->addWidget(nodeCoordLabel);
-
+    form->addWidget(nodeCoordLabel);
+    
+    form->addWidget(new QLabel("名称:"));
     nodeNameEdit = new QLineEdit();
-    nodeNameEdit->setPlaceholderText("名称 (默认为 building_/road_ 自动生成)");
-    v->addWidget(nodeNameEdit);
-
-    nodeTypeCombo = new QComboBox();
-    nodeTypeCombo->addItem("可见节点", 0);
-    nodeTypeCombo->addItem("幽灵节点", 9);
-    v->addWidget(nodeTypeCombo);
-
+    form->addWidget(nodeNameEdit);
+    
+    form->addWidget(new QLabel("海拔 (Z):"));
+    nodeZEdit = new QLineEdit();
+    form->addWidget(nodeZEdit);
+    
+    form->addWidget(new QLabel("分类:"));
+    nodeCatCombo = new QComboBox();
+    // 填充 Enum Category
+    nodeCatCombo->addItems({"None", "Dorm", "Canteen", "Classroom", "Road"}); // 简略
+    form->addWidget(nodeCatCombo);
+    
+    form->addWidget(new QLabel("描述:"));
     nodeDescEdit = new QLineEdit();
-    nodeDescEdit->setPlaceholderText("描述，默认 '无'");
-    v->addWidget(nodeDescEdit);
+    form->addWidget(nodeDescEdit);
+    
+    nodeSaveBtn = new QPushButton("应用修改");
+    connect(nodeSaveBtn, &QPushButton::clicked, this, &MainWindow::onSaveNodeProp);
+    form->addWidget(nodeSaveBtn);
+    
+    nodeDeleteBtn = new QPushButton("删除此节点");
+    nodeDeleteBtn->setStyleSheet("color: red;");
+    connect(nodeDeleteBtn, &QPushButton::clicked, this, &MainWindow::onDeleteNode);
+    form->addWidget(nodeDeleteBtn);
+    
+    form->addStretch();
+    npLayout->addWidget(npBox);
+    rightPanelStack->addWidget(nodePropPanel);
 
-    nodeCategoryEdit = new QLineEdit();
-    nodeCategoryEdit->setPlaceholderText("分类，默认 'None'");
-    v->addWidget(nodeCategoryEdit);
-
-    connectPrevCheck = new QCheckBox("连接到上一个已保存节点");
-    v->addWidget(connectPrevCheck);
-
+    // 2. 边属性页
+    edgePropPanel = new QWidget();
+    QVBoxLayout* epLayout = new QVBoxLayout(edgePropPanel);
+    QGroupBox* epBox = new QGroupBox("连接管理");
+    QVBoxLayout* eform = new QVBoxLayout(epBox);
+    
+    edgeInfoLabel = new QLabel("选择两点以连接");
+    eform->addWidget(edgeInfoLabel);
+    
+    edgeConnectBtn = new QPushButton("🔗 建立连接");
+    connect(edgeConnectBtn, &QPushButton::clicked, this, &MainWindow::onConnectEdge);
+    eform->addWidget(edgeConnectBtn);
+    
+    eform->addWidget(new QLabel("道路名称:"));
+    edgeNameEdit = new QLineEdit();
+    eform->addWidget(edgeNameEdit);
+    
+    eform->addWidget(new QLabel("描述:"));
     edgeDescEdit = new QLineEdit();
-    edgeDescEdit->setPlaceholderText("道路描述，默认 '无'");
-    v->addWidget(edgeDescEdit);
-
-    saveNodeBtn = new QPushButton("💾 保存节点 / 可选连边");
-    v->addWidget(saveNodeBtn);
-    connect(saveNodeBtn, &QPushButton::clicked, this, &MainWindow::onSaveNode);
-
-    panelLayout->addWidget(editorBox);
+    eform->addWidget(edgeDescEdit);
+    
+    edgeDisconnectBtn = new QPushButton("💔 断开连接");
+    edgeDisconnectBtn->setStyleSheet("color: red;");
+    connect(edgeDisconnectBtn, &QPushButton::clicked, this, &MainWindow::onDisconnectEdge);
+    eform->addWidget(edgeDisconnectBtn);
+    
+    eform->addStretch();
+    epLayout->addWidget(epBox);
+    rightPanelStack->addWidget(edgePropPanel);
 }
 
-void MainWindow::onEditPointPicked(QPointF pos, bool ctrlPressed)
-{
-    nodeCoordLabel->setText(QString("坐标: (%1, %2)").arg(pos.x(), 0, 'f', 2).arg(pos.y(), 0, 'f', 2));
-    nodeTypeCombo->setCurrentIndex(ctrlPressed ? 0 : 1); // ctrl->建筑
-    // 记录坐标在控件属性中
-    nodeCoordLabel->setProperty("sceneX", pos.x());
-    nodeCoordLabel->setProperty("sceneY", pos.y());
+void MainWindow::refreshMap() {
+    mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
 }
 
-void MainWindow::onSaveNode()
-{
-    if (!mapWidget || !mapWidget->getEditor()) return;
+// --- 逻辑处理 ---
 
-    double x = nodeCoordLabel->property("sceneX").toDouble();
-    double y = nodeCoordLabel->property("sceneY").toDouble();
-    if (!nodeCoordLabel->property("sceneX").isValid()) {
-        QMessageBox::warning(this, "提示", "请先在地图上点击一个点以确定坐标");
-        return;
+void MainWindow::onModeChanged(int id) {
+    EditMode m = EditMode::None;
+    if (id == 1) m = EditMode::ConnectEdge;
+    else if (id == 2) m = EditMode::AddBuilding;
+    else if (id == 3) m = EditMode::AddGhost;
+    
+    mapWidget->setEditMode(m);
+    rightPanelStack->setCurrentWidget(emptyPanel);
+    statusLabel->setText(QString("模式切换: %1").arg(modeGroup->button(id)->text()));
+}
+
+void MainWindow::onNodeClicked(int nodeId, bool isCtrlPressed) {
+    // 只有在非浏览模式下，或者浏览模式也可以看属性
+    // 需求说：Building/Ghost模式下点选已有节点修改
+    EditMode m = mapWidget->getEditMode();
+    if (m == EditMode::AddBuilding || m == EditMode::AddGhost || m == EditMode::None) {
+        showNodeProperty(nodeId);
     }
+}
 
-    QString name = nodeNameEdit->text();
-    int type = nodeTypeCombo->currentData().toInt();
-    QString desc = nodeDescEdit->text();
-    QString category = nodeCategoryEdit->text();
-    bool connectFlag = connectPrevCheck->isChecked() && (lastSavedNodeId != -1);
-    QString edgeDesc = edgeDescEdit->text();
+void MainWindow::onEmptySpaceClicked(double x, double y) {
+    EditMode m = mapWidget->getEditMode();
+    if (m == EditMode::AddBuilding) {
+        // 直接创建新建筑
+        int newId = model->addNode(x, y, NodeType::Visible);
+        refreshMap();
+        showNodeProperty(newId);
+        statusLabel->setText("新建建筑物成功");
+    } else if (m == EditMode::AddGhost) {
+        // 直接创建路口
+        int newId = model->addNode(x, y, NodeType::Ghost);
+        refreshMap();
+        showNodeProperty(newId);
+        statusLabel->setText("新建路口成功");
+    }
+}
 
-    int newId = mapWidget->getEditor()->createNode(name, QPointF(x,y), type,
-            desc, category, lastSavedNodeId, connectFlag, QStringLiteral("自动道路"), edgeDesc);
+void MainWindow::onNodeMoved(int id, double x, double y) {
+    Node n = model->getNode(id);
+    n.x = x; n.y = y;
+    model->updateNode(n);
+    refreshMap(); // 刷新显示
+    // 如果当前正开着属性面板，更新坐标显示
+    if (currentNodeId == id && rightPanelStack->currentWidget() == nodePropPanel) {
+        nodeCoordLabel->setText(QString("坐标: (%1, %2)").arg(x, 0, 'f', 1).arg(y, 0, 'f', 1));
+    }
+}
 
-    // 立即显示在地图上（包括幽灵节点）
-    mapWidget->addEditVisualNode(newId, name.isEmpty() ? QString::number(newId) : name, QPointF(x,y), type);
-
-    if (connectFlag) {
-        statusLabel->setText(QString("已保存节点 %1 并连接 %2").arg(newId).arg(lastSavedNodeId));
+void MainWindow::onUndoRequested() {
+    if (model->canUndo()) {
+        model->undo();
+        refreshMap();
+        statusLabel->setText("已撤销上一步操作");
+        rightPanelStack->setCurrentWidget(emptyPanel);
     } else {
-        statusLabel->setText(QString("已保存节点 %1").arg(newId));
+        statusLabel->setText("无可撤销的操作");
     }
-
-    lastSavedNodeId = newId;
-    nodeNameEdit->clear();
-    nodeDescEdit->clear();
-    nodeCategoryEdit->clear();
-    edgeDescEdit->clear();
 }
+
+void MainWindow::showNodeProperty(int id) {
+    currentNodeId = id;
+    Node n = model->getNode(id);
+    
+    nodeNameEdit->setText(n.name);
+    nodeDescEdit->setText(n.description);
+    nodeZEdit->setText(QString::number(n.z));
+    nodeCoordLabel->setText(QString("坐标: (%1, %2)").arg(n.x, 0, 'f', 1).arg(n.y, 0, 'f', 1));
+    
+    // 阻止某些修改：x,y 不可改(已通过Label实现)，其他可改
+    // 切换面板
+    rightPanelStack->setCurrentWidget(nodePropPanel);
+}
+
+void MainWindow::onSaveNodeProp() {
+    if (currentNodeId == -1) return;
+    Node n = model->getNode(currentNodeId);
+    n.name = nodeNameEdit->text();
+    n.description = nodeDescEdit->text();
+    n.z = nodeZEdit->text().toDouble();
+    // Category 略
+    
+    model->updateNode(n);
+    refreshMap();
+    statusLabel->setText("节点属性已更新");
+}
+
+void MainWindow::onDeleteNode() {
+    if (currentNodeId == -1) return;
+    model->deleteNode(currentNodeId);
+    currentNodeId = -1;
+    refreshMap();
+    rightPanelStack->setCurrentWidget(emptyPanel);
+    statusLabel->setText("节点已删除");
+}
+
+// --- 连边逻辑 ---
+
+void MainWindow::onEdgeConnectionRequested(int idA, int idB) {
+    currentEdgeU = idA;
+    currentEdgeV = idB;
+    showEdgePanel(idA, idB);
+}
+
+void MainWindow::showEdgePanel(int u, int v) {
+    rightPanelStack->setCurrentWidget(edgePropPanel);
+    edgeInfoLabel->setText(QString("连接: %1 <-> %2").arg(u).arg(v));
+    
+    const Edge* e = model->findEdge(u, v);
+    if (e) {
+        edgeConnectBtn->setText("更新连接数据");
+        edgeDisconnectBtn->setEnabled(true);
+        edgeNameEdit->setText(e->name);
+        edgeDescEdit->setText(e->description);
+    } else {
+        edgeConnectBtn->setText("建立新连接");
+        edgeDisconnectBtn->setEnabled(false);
+        edgeNameEdit->setText("自动道路");
+        edgeDescEdit->clear();
+    }
+}
+
+void MainWindow::onConnectEdge() {
+    if (currentEdgeU == -1 || currentEdgeV == -1) return;
+    
+    Node a = model->getNode(currentEdgeU);
+    Node b = model->getNode(currentEdgeV);
+    double dist = std::hypot(a.x - b.x, a.y - b.y);
+    
+    Edge e;
+    e.u = currentEdgeU; e.v = currentEdgeV;
+    e.distance = dist; // 自动计算
+    e.type = EdgeType::Normal;
+    e.isSlope = false; 
+    e.name = edgeNameEdit->text();
+    e.description = edgeDescEdit->text();
+    
+    model->addOrUpdateEdge(e);
+    refreshMap();
+    showEdgePanel(currentEdgeU, currentEdgeV); // 刷新界面状态
+    statusLabel->setText("连接已建立/更新");
+}
+
+void MainWindow::onDisconnectEdge() {
+    if (currentEdgeU == -1 || currentEdgeV == -1) return;
+    model->deleteEdge(currentEdgeU, currentEdgeV);
+    refreshMap();
+    showEdgePanel(currentEdgeU, currentEdgeV);
+    statusLabel->setText("连接已断开");
+}
+
+void MainWindow::onSaveAll() {
+    QString appDir = QCoreApplication::applicationDirPath();
+    bool ok = model->saveData(appDir + "/Data/nodes.txt", appDir + "/Data/edges.txt");
+    if (ok) QMessageBox::information(this, "保存", "数据已成功保存至文件！");
+    else QMessageBox::critical(this, "错误", "保存失败，请检查文件权限！");
+}
+
