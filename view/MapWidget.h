@@ -2,17 +2,25 @@
 
 #include <QtWidgets/QGraphicsView>
 #include <QtWidgets/QGraphicsScene>
-#include <QtGui/QWheelEvent>
-#include <QtGui/QResizeEvent>
 #include <QtWidgets/QGraphicsPixmapItem>
 #include <QtWidgets/QGraphicsLineItem>
+#include <QtWidgets/QGraphicsPathItem> 
+#include <QtWidgets/QGraphicsTextItem>
+#include <QtGui/QMouseEvent>
+#include <QtGui/QWheelEvent>
 #include <QtCore/QTimer>
 #include <QtCore/QMap>
 #include <QtCore/QPointer>
 #include <QtCore/QVariantAnimation>
-#include "../GraphData.h" // 引入新的 Enums
+#include <QtCore/QPropertyAnimation>
+#include "../GraphData.h"
 
-class MapEditor;
+enum class EditMode {
+    None,           
+    ConnectEdge,    
+    AddBuilding,    
+    AddGhost        
+};
 
 class MapWidget : public QGraphicsView
 {
@@ -22,79 +30,95 @@ public:
 
     void drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges);
     void setBackgroundImage(const QString& path);
-    void setStartNode(int nodeId);
-    void setEndNode(int nodeId);
+    void setEditMode(EditMode mode);
+    EditMode getEditMode() const { return currentMode; }
 
-    void setEditMode(bool enabled);
-    bool isEditMode() const { return editMode; }
-    MapEditor* getEditor() const { return mapEditor; }
-    
     void clearEditTempItems();
-    void addEditVisualNode(int id, const QString& name, const QPointF& pos, int type); // 保持 int 接口方便调用
-    
+    void addEditVisualNode(int id, const QString& name, const QPointF& pos, int type);
+
     void highlightPath(const QVector<int>& pathNodeIds, double animationDuration = 1.0);
     void clearPathHighlight();
+    void setActiveEdge(int u, int v);
 
 signals:
-    void nodeClicked(int nodeId, QString name, bool isLeftClick);
-    void editPointPicked(QPointF scenePos, bool ctrlPressed);
+    void nodeClicked(int nodeId, QString name, bool isLeftClick); 
+    void nodeEditClicked(int nodeId, bool isCtrlPressed);
+    void emptySpaceClicked(double x, double y);
+    void edgeConnectionRequested(int idA, int idB);
+    void nodeMoved(int id, double newX, double newY);
+    void undoRequested(); 
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
-    void resizeEvent(QResizeEvent *event) override;
-    void leaveEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override; 
+    void leaveEvent(QEvent *event) override;        
 
 private slots:
-    void onAnimationTick();
-    void resumeHoverAnimations();
+    void onAnimationTick();      
+    void resumeHoverAnimations(); 
 
 private:
     QGraphicsScene* scene;
+    QGraphicsPixmapItem* backgroundItem = nullptr;
+    
     QVector<Node> cachedNodes;
     QVector<Edge> cachedEdges;
     QMap<int, QGraphicsTextItem*> nodeLabelItems;
     
-    int findNodeAt(const QPointF& pos);
-    int findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV);
+    EditMode currentMode = EditMode::None;
     
-    QGraphicsPixmapItem* backgroundItem = nullptr;
-    double currentScale = 1.0;
+    bool isMiddlePanning = false;
+    QPoint lastPanPos;
+    bool isNodeDragging = false;
+    int draggingNodeId = -1;
+    QPointF lastScenePos;
     
-    // 悬停相关
+    int connectFirstNodeId = -1;
+    QVector<QGraphicsItem*> editTempItems; 
+
+    int activeEdgeU = -1;
+    int activeEdgeV = -1;
+
+    // --- 悬停气泡管理 ---
     int hoveredNodeId = -1;
     int hoveredEdgeIndex = -1;
+    
+    // 活跃的气泡
     QVector<QGraphicsItem*> hoverItems;
+    // 正在淡出的气泡
+    QVector<QGraphicsItem*> dyingItems; 
+    
     QVector<int> hiddenLabelNodeIds;
     QVector<QPointer<QAbstractAnimation>> hoverAnims;
     QTimer* hoverResumeTimer = nullptr;
     quint64 hoverUidCounter = 1;
-    
+
     void clearHoverItems();
+    void fadeOutHoverItems();
+    void killDyingItems(); 
+    void stopHoverAnimations(); // 【修复】补上这个缺失的声明
+    
     void showNodeHoverBubble(const Node& node);
     void showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoint);
-    QColor withAlpha(const QColor& c, int alpha);
     void startHoverAppearAnimation();
     void pauseHoverAnimations();
-    QColor nodeBaseColor(const Node& node) const;
-    QColor edgeBaseColor(const Edge& edge) const;
+    QColor withAlpha(const QColor& c, int alpha);
     
-    // 路径动画相关
+    // --- 路径动画 ---
     QVector<int> currentPathNodeIds;
     double animationProgress = 0.0;
     double animationDurationMs = 1000.0;
     qint64 animationStartTime = 0;
     QTimer* animationTimer = nullptr;
-    void drawPathGrowthAnimation();
+    QGraphicsPathItem* activeTrackItem = nullptr;
+    QGraphicsPathItem* activeGrowthItem = nullptr;
     
-    // 辅助
-    QPen edgePenForType(EdgeType type) const; // 更新为 Enum
-    QPainterPath buildSmoothPath(const QVector<QPointF>& pts) const;
-    QPainterPath buildPartialPathFromLength(const QPainterPath& fullPath, double length) const;
+    void drawPathGrowthAnimation();
 
-    bool editMode = false;
-    MapEditor* mapEditor = nullptr;
-    QVector<QGraphicsItem*> editTempItems;
+    int findNodeAt(const QPointF& pos);
+    int findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV); 
+    QPen edgePenForType(EdgeType type) const;
 };
