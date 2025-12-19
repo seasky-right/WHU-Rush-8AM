@@ -10,6 +10,8 @@ qt_add_executable(WHU-8am-Rush
     main.cpp
     view/mainwindow.cpp
     view/mainwindow.h
+    view/EditorWindow.cpp   # 新增
+    view/EditorWindow.h     # 新增
     mainwindow.ui
     model/GraphModel.h model/GraphModel.cpp
     model/PathRecommendation.h
