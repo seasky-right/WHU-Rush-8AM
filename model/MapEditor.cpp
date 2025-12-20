@@ -11,7 +11,7 @@
 MapEditor::MapEditor(QObject* parent)
     : QObject(parent),
       m_buildingIdCounter(100),
-      m_roadIdCounter(900),
+      m_roadIdCounter(10000),
       m_lastConnectedId(-1) {
 }
 

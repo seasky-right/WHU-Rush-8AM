@@ -14,7 +14,7 @@ const double SLOPE_THRESHOLD = 0.05;        // 5%
 
 GraphModel::GraphModel() {
     maxBuildingId = 100;
-    maxRoadId = 900;
+    maxRoadId = 10000;
 }
 
 // ------------------- 加载与保存 -------------------
@@ -22,8 +22,11 @@ GraphModel::GraphModel() {
 bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
     nodesMap.clear();
     edgesList.clear();
-    maxBuildingId = 100;
-    maxRoadId = 900;
+    // 【注意】这里要根据你们的分工修改起始ID！
+    // 如果你是同学A，用 1000 / 10000
+    // 如果你是同学B，用 3000 / 20000 ...
+    maxBuildingId = 100; 
+    maxRoadId = 10000;
 
     // 1. 加载节点
     QFile nodeFile(nodesPath);
@@ -41,7 +44,6 @@ bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
                 node.x = parts[2].toDouble();
                 node.y = parts[3].toDouble();
                 node.z = parts[4].toDouble();
-                // 兼容 int -> Enum
                 int typeInt = parts[5].toInt();
                 node.type = (typeInt == 9) ? NodeType::Ghost : NodeType::Visible;
                 
@@ -54,7 +56,6 @@ bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
                 }
                 nodesMap.insert(node.id, node);
 
-                // 更新ID计数器，防止新建ID冲突
                 if (node.type == NodeType::Visible && node.id >= maxBuildingId) maxBuildingId = node.id + 1;
                 if (node.type == NodeType::Ghost && node.id >= maxRoadId) maxRoadId = node.id + 1;
             }
@@ -62,7 +63,8 @@ bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
         nodeFile.close();
     } else {
         qDebug() << "❌ Error: 无法打开节点文件:" << nodesPath;
-        return false;
+        // 如果文件不存在，返回 true 允许新建
+        // return false; 
     }
 
     // 2. 加载边
@@ -83,24 +85,23 @@ bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
                 if (parts.size() > 3) edge.type = static_cast<EdgeType>(parts[3].toInt());
                 else edge.type = EdgeType::Normal;
 
-                if (parts.size() > 4) edge.isSlope = (parts[4].toInt() == 1);
-                else edge.isSlope = false;
+                // 【核心修改】这里直接读取 double 类型的 slope
+                // 不再读取 isSlope (int 0/1)
+                if (parts.size() > 4) edge.slope = parts[4].toDouble();
+                else edge.slope = 0.0;
                 
                 if (parts.size() > 5) edge.name = parts[5].trimmed();
                 if (parts.size() > 6) edge.description = parts[6].trimmed();
                 
-                edge.slope = edge.isSlope ? 0.08 : 0.0; 
-
                 edgesList.append(edge);
             }
         }
         edgeFile.close();
     } else {
         qDebug() << "❌ Error: 无法打开边文件:" << edgesPath;
-        return false;
     }
 
-    // 3. 构建邻接表 (关键步骤)
+    // 3. 构建邻接表
     buildAdjacencyList();
     qDebug() << "✅ 数据加载完毕: Nodes=" << nodesMap.size() << " Edges=" << edgesList.size();
     return true;
@@ -113,7 +114,6 @@ bool GraphModel::saveData(const QString& nodesPath, const QString& edgesPath) {
     QTextStream outNode(&nodeFile);
     outNode.setEncoding(QStringConverter::Utf8);
     
-    // 排序保存，美观
     QList<int> keys = nodesMap.keys();
     std::sort(keys.begin(), keys.end());
     
@@ -132,8 +132,9 @@ bool GraphModel::saveData(const QString& nodesPath, const QString& edgesPath) {
     QTextStream outEdge(&edgeFile);
     outEdge.setEncoding(QStringConverter::Utf8);
     for(const auto& e : edgesList) {
+        // 【核心修改】第5列写入 double 类型的 slope
         outEdge << e.u << "," << e.v << "," << e.distance << ","
-                << static_cast<int>(e.type) << "," << (e.isSlope?1:0) << ","
+                << static_cast<int>(e.type) << "," << e.slope << ","
                 << e.name << "," << e.description << "\n";
     }
     edgeFile.close();
@@ -148,7 +149,10 @@ void GraphModel::buildAdjacencyList() {
         // 添加反向边 (无向图)
         Edge rev = edge;
         std::swap(rev.u, rev.v);
-        rev.slope = -edge.slope; // 反向坡度取反
+        
+        // 【核心修改】直接对 slope 取反，不再依赖 isSlope
+        rev.slope = -edge.slope; 
+        
         adj[edge.v].append(rev);
     }
 }
@@ -159,15 +163,24 @@ int GraphModel::addNode(double x, double y, NodeType type) {
     int id = (type == NodeType::Visible) ? (maxBuildingId++) : (maxRoadId++);
     Node n;
     n.id = id;
-    n.name = (type==NodeType::Visible) ? QString("建筑_%1").arg(id) : QString("路口_%1").arg(id);
+    
+    // 根据类型自动命名
+    if (type == NodeType::Visible) {
+        n.name = QString("建筑_%1").arg(id);
+        n.category = NodeCategory::None; // 建筑默认为 None，等待用户指定
+    } else {
+        n.name = QString("路口_%1").arg(id);
+        // 【核心修改】新建路口时，默认分类设为 Road
+        n.category = NodeCategory::Road; 
+    }
+
     n.x = x; n.y = y; n.z = 30.0;
     n.type = type;
     n.description = "无";
-    n.category = NodeCategory::None;
     
     nodesMap.insert(id, n);
     
-    // 记录 Undo
+    // 记录 Undo ... (保持原有代码不变)
     HistoryAction act;
     act.type = HistoryAction::AddNode;
     act.nodeData = n;

@@ -61,6 +61,8 @@ private:
     QLabel *edgeInfoLabel;
     QLineEdit *edgeNameEdit, *edgeDescEdit;
     QPushButton *edgeConnectBtn, *edgeDisconnectBtn;
+    QCheckBox* edgeSlopeCheck; // 控制坡度
+    QComboBox *edgeTypeCombo;
     int currentEdgeU = -1, currentEdgeV = -1;
 
     void setupUi();

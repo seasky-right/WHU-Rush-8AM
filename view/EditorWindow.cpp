@@ -105,7 +105,13 @@ void EditorWindow::setupRightPanel() {
     nodeZEdit = new QLineEdit(); form->addWidget(nodeZEdit);
     form->addWidget(new QLabel("分类:"));
     nodeCatCombo = new QComboBox();
-    nodeCatCombo->addItems({"None", "Dorm", "Canteen", "Classroom", "Road", "Gate", "Playground"});
+    // 补全所有分类
+    nodeCatCombo->addItems({
+        "None", "Dorm", "Canteen", "Service", "Square", 
+        "Gate", "Road", "Park", "Shop", "Playground", 
+        "Landmark", "Lake", "Building", "Classroom", 
+        "Hotel", "BusStation"
+    });
     form->addWidget(nodeCatCombo);
     form->addWidget(new QLabel("描述:"));
     nodeDescEdit = new QLineEdit(); form->addWidget(nodeDescEdit);
@@ -123,13 +129,17 @@ void EditorWindow::setupRightPanel() {
     npLayout->addWidget(npBox);
     rightPanelStack->addWidget(nodePropPanel);
 
-    // --- 边属性页 ---
+    // --- 边属性页 (这里添加了复选框) ---
     edgePropPanel = new QWidget();
     QVBoxLayout* epLayout = new QVBoxLayout(edgePropPanel);
     QGroupBox* epBox = new QGroupBox("路径连接");
     QVBoxLayout* eform = new QVBoxLayout(epBox);
     
     edgeInfoLabel = new QLabel("-"); eform->addWidget(edgeInfoLabel);
+    eform->addWidget(new QLabel("道路类型:"));
+    edgeTypeCombo = new QComboBox();
+    edgeTypeCombo->addItems({"普通道路 (Normal)", "主干道 (Main)", "小径 (Path)", "室内 (Indoor)", "楼梯 (Stairs)"});
+    eform->addWidget(edgeTypeCombo);
     edgeConnectBtn = new QPushButton("建立连接");
     connect(edgeConnectBtn, &QPushButton::clicked, this, &EditorWindow::onConnectEdge);
     eform->addWidget(edgeConnectBtn);
@@ -138,6 +148,11 @@ void EditorWindow::setupRightPanel() {
     edgeNameEdit = new QLineEdit(); eform->addWidget(edgeNameEdit);
     eform->addWidget(new QLabel("描述:"));
     edgeDescEdit = new QLineEdit(); eform->addWidget(edgeDescEdit);
+
+    // 【新增】坡度复选框
+    edgeSlopeCheck = new QCheckBox("是上坡 (A->B)");
+    edgeSlopeCheck->setToolTip("勾选表示 A到B 为上坡 (8%)，反向为下坡");
+    eform->addWidget(edgeSlopeCheck);
     
     edgeDisconnectBtn = new QPushButton("断开连接");
     edgeDisconnectBtn->setStyleSheet("color: red;");
@@ -227,16 +242,27 @@ void EditorWindow::showNodeProperty(int id) {
     nodeZEdit->setText(QString::number(n.z));
     nodeCoordLabel->setText(QString("(%1, %2)").arg((int)n.x).arg((int)n.y));
     
-    // 2. 【修复】正确显示当前的分类
-    // 获取节点分类的字符串表示 (例如 "Dorm")
-    QString catStr = Node::categoryToString(n.category);
-    
-    // 在下拉框中查找这个字符串，并设置为选中状态
-    int idx = nodeCatCombo->findText(catStr);
-    if (idx != -1) {
-        nodeCatCombo->setCurrentIndex(idx);
+    // 2. 【核心修改】分类逻辑锁定
+    if (n.type == NodeType::Ghost) {
+        // 如果是 Ghost 节点：
+        // 强制选中 "Road"
+        int roadIdx = nodeCatCombo->findText("Road");
+        if (roadIdx != -1) nodeCatCombo->setCurrentIndex(roadIdx);
+        
+        // 锁定下拉框，变灰，不允许修改
+        nodeCatCombo->setEnabled(false);
+        nodeCatCombo->setToolTip("Ghost (路口) 节点的分类固定为 Road");
     } else {
-        nodeCatCombo->setCurrentIndex(0); // 没找到则默认 None
+        // 如果是 Visible 建筑：
+        // 恢复启用
+        nodeCatCombo->setEnabled(true);
+        nodeCatCombo->setToolTip("");
+        
+        // 正常显示当前的分类
+        QString catStr = Node::categoryToString(n.category);
+        int idx = nodeCatCombo->findText(catStr);
+        if (idx != -1) nodeCatCombo->setCurrentIndex(idx);
+        else nodeCatCombo->setCurrentIndex(0);
     }
     
     rightPanelStack->setCurrentWidget(nodePropPanel);
@@ -295,11 +321,23 @@ void EditorWindow::showEdgePanel(int u, int v) {
         edgeDisconnectBtn->setEnabled(true);
         edgeNameEdit->setText(e->name);
         edgeDescEdit->setText(e->description);
+        
+        // 【核心修改】根据 slope 的值决定是否勾选
+        // 只要 slope 绝对值 > 0.01 就认为是坡
+        edgeSlopeCheck->setChecked(std::abs(e->slope) > 0.01);
+
+        edgeTypeCombo->setCurrentIndex(static_cast<int>(e->type));
+        
     } else {
         edgeConnectBtn->setText("新建连接");
         edgeDisconnectBtn->setEnabled(false);
         edgeNameEdit->setText("路");
         edgeDescEdit->clear();
+        
+        // 【核心修改】新建默认无坡
+        edgeSlopeCheck->setChecked(false);
+
+        edgeTypeCombo->setCurrentIndex(0); // 默认 Normal
     }
 }
 
@@ -307,14 +345,25 @@ void EditorWindow::onConnectEdge() {
     if (currentEdgeU == -1) return;
     Node a = model->getNode(currentEdgeU);
     Node b = model->getNode(currentEdgeV);
-    double dist = std::hypot(a.x - b.x, a.y - b.y);
+    
+    // 1. 计算距离 (像素 -> 米，应用 0.91 比例尺)
+    double pixelDist = std::hypot(a.x - b.x, a.y - b.y);
+    double realDist = pixelDist * 0.91;
+
     Edge e;
-    e.u = currentEdgeU; e.v = currentEdgeV;
-    e.distance = dist;
-    e.type = EdgeType::Normal;
-    e.isSlope = false; 
+    e.u = currentEdgeU; 
+    e.v = currentEdgeV;
+    e.distance = realDist;
+    
+    // 2. 【新增】从下拉框读取道路类型 (不再是写死的 Normal)
+    e.type = static_cast<EdgeType>(edgeTypeCombo->currentIndex());
+    
+    // 3. 【新增】从复选框读取坡度 (勾选=0.08, 没勾=0.0)
+    e.slope = edgeSlopeCheck->isChecked() ? 0.08 : 0.0; 
+    
     e.name = edgeNameEdit->text();
     e.description = edgeDescEdit->text();
+    
     model->addOrUpdateEdge(e);
     refreshMap();
     showEdgePanel(currentEdgeU, currentEdgeV);

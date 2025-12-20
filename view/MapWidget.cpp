@@ -115,11 +115,12 @@ void MapWidget::stopHoverAnimations() {
 
 void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 {
-    // 1. 停止动画 (必须在删除 Item 之前)
+    // =========================================================
+    // 1. 清理场景 (保持原样)
+    // =========================================================
     if (animationTimer->isActive()) animationTimer->stop();
     stopHoverAnimations();
 
-    // 2. 清理指针
     activeTrackItem = nullptr;
     activeGrowthItem = nullptr;
     currentPathNodeIds.clear();
@@ -130,7 +131,6 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
     nodeLabelItems.clear();
     hiddenLabelNodeIds.clear();
     
-    // 3. 物理清理场景
     auto items = scene->items();
     for (auto it : items) {
         if (it != backgroundItem && it->zValue() > -100) {
@@ -145,10 +145,15 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
     QMap<int, Node> nodeMap;
     for(const auto& node : nodes) nodeMap.insert(node.id, node);
 
-    // 绘制边
+    // =========================================================
+    // 2. 绘制边 (这里进行了修改)
+    // =========================================================
+    
+    // --- 原有代码：统一样式定义 (保留但不再主要使用) ---
     QPen edgePen(QColor("#C7C7CC")); 
     edgePen.setWidth(2);
     edgePen.setCapStyle(Qt::RoundCap);
+    // ------------------------------------------------
 
     QPen activeEdgePen(QColor("#007AFF"));
     activeEdgePen.setWidth(4);
@@ -166,12 +171,33 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
                     isActiveEdge = true;
                 }
             }
+
+            // ================== 修改区域开始 ==================
+
+            /* // [原有代码备份]：无论什么类型，都使用统一的灰色 edgePen
             auto line = scene->addLine(start.x, start.y, end.x, end.y, isActiveEdge ? activeEdgePen : edgePen);
             line->setZValue(isActiveEdge ? 5 : 0); 
+            */
+
+            // [新代码]：调用 edgePenForType 获取特定颜色 (楼梯=橙色, 主干道=蓝色等)
+            QPen drawPen = isActiveEdge ? activeEdgePen : edgePenForType(edge.type);
+            auto line = scene->addLine(start.x, start.y, end.x, end.y, drawPen);
+            
+            // [新代码]：调整层级，避免楼梯被普通路覆盖
+            int z = 0;
+            if (edge.type == EdgeType::Main) z = 1;
+            if (edge.type == EdgeType::Stairs) z = 2; // 楼梯画在上面
+            if (isActiveEdge) z = 5; // 选中的最高
+            
+            line->setZValue(z);
+
+            // ================== 修改区域结束 ==================
         }
     }
 
-    // 连线预览
+    // =========================================================
+    // 3. 连线预览 (保持原样)
+    // =========================================================
     if (currentMode == EditMode::ConnectEdge && connectFirstNodeId != -1 && hoveredNodeId != -1 && connectFirstNodeId != hoveredNodeId) {
         if (nodeMap.contains(connectFirstNodeId) && nodeMap.contains(hoveredNodeId)) {
             Node start = nodeMap[connectFirstNodeId];
@@ -184,7 +210,9 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         }
     }
 
-    // 绘制节点
+    // =========================================================
+    // 4. 绘制节点 (保持原样)
+    // =========================================================
     QColor colorNormal("#8E8E93");     
     QColor colorActive("#007AFF");     
     QColor colorGhost("#E5E5EA");      
@@ -836,15 +864,37 @@ int MapWidget::findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, 
 }
 
 QPen MapWidget::edgePenForType(EdgeType type) const {
-    QColor c(200,200,200); int width = 3;
+    QColor c(200,200,200); 
+    int width = 3;
+    
     switch (type) {
-    case EdgeType::Normal: c = QColor(220,220,220); width = 3; break;
-    case EdgeType::Main:   c = QColor(180,200,230); width = 4; break;
-    case EdgeType::Path:   c = QColor(180,220,180); width = 2; break;
-    case EdgeType::Indoor: c = QColor(230,200,180); width = 2; break;
+    case EdgeType::Normal: 
+        c = QColor(220,220,220); width = 3; 
+        break;
+    case EdgeType::Main:   
+        c = QColor(180,200,230); width = 4; 
+        break;
+    case EdgeType::Path:   
+        c = QColor(180,220,180); width = 2; 
+        break;
+    case EdgeType::Indoor: 
+        c = QColor(230,200,180); width = 2; 
+        break;
+        
+    // 【新增】楼梯样式：显眼的橙色
+    case EdgeType::Stairs: 
+        c = QColor(255, 149, 0); width = 2; 
+        break; 
     }
-    QPen pen(c); pen.setWidth(width);
-    pen.setJoinStyle(Qt::RoundJoin); pen.setCapStyle(Qt::RoundCap);
+    
+    QPen pen(c); 
+    pen.setWidth(width);
+    pen.setJoinStyle(Qt::RoundJoin); 
+    pen.setCapStyle(Qt::RoundCap);
+    
+    // 如果你想让楼梯变成虚线，可以把下面这行注释取消掉
+    // if (type == EdgeType::Stairs) pen.setStyle(Qt::DashLine);
+
     return pen;
 }
 

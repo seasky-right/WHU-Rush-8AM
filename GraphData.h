@@ -14,12 +14,12 @@ enum class NodeType {
 enum class NodeCategory {
     None, Dorm, Canteen, Service, Square, Gate, Road, 
     Park, Shop, Playground, Landmark, Lake, Building, 
-    Classroom, Hotel
+    Classroom, Hotel, BusStation
 };
 
 // 3. 边类型
 enum class EdgeType {
-    Normal = 0, Main = 1, Path = 2, Indoor = 3
+    Normal = 0, Main = 1, Path = 2, Indoor = 3, Stairs = 4
 };
 
 struct Node {
@@ -47,6 +47,7 @@ struct Node {
         if (s == "Building") return NodeCategory::Building;
         if (s == "Classroom") return NodeCategory::Classroom;
         if (s == "Hotel") return NodeCategory::Hotel;
+        if (s == "BusStation") return NodeCategory::BusStation; // <--- 新增
         return NodeCategory::None;
     }
     
@@ -67,6 +68,7 @@ struct Node {
             case NodeCategory::Building: return "Building";
             case NodeCategory::Classroom: return "Classroom";
             case NodeCategory::Hotel: return "Hotel";
+            case NodeCategory::BusStation: return "BusStation";
             default: return "None";
         }
     }
@@ -76,7 +78,7 @@ struct Edge {
     int u, v;
     double distance;
     EdgeType type;
-    bool isSlope;
+    // bool isSlope; <--- 【冗余代码】
     double slope;
     QString name;
     QString description;

@@ -66,7 +66,7 @@ private:
     
     // ID 计数器
     int maxBuildingId = 100;
-    int maxRoadId = 900;
+    int maxRoadId = 10000;
     
     // 撤销栈
     QStack<HistoryAction> undoStack;
