@@ -11,24 +11,38 @@ EditorWindow::EditorWindow(GraphModel* sharedModel, QWidget *parent)
 
     // 独立的 MapWidget，专用于编辑
     mapWidget = new MapWidget(this);
-    // 加载背景
     QString appDir = QCoreApplication::applicationDirPath();
     mapWidget->setBackgroundImage(appDir + "/Data/map.png");
     
     // 初始化 UI
     setupUi();
 
-    // 信号连接
+    // =========================================================
+    // 【核心修复】修改信号连接，防止"自杀式"崩溃
+    // =========================================================
+
+    // 1. 只是显示属性面板，不涉及删除图元，直接连接即可 (AutoConnection)
     connect(mapWidget, &MapWidget::nodeEditClicked, this, &EditorWindow::onNodeEditClicked);
-    connect(mapWidget, &MapWidget::emptySpaceClicked, this, &EditorWindow::onEmptySpaceClicked);
+    
+    // 2. 【关键】新建节点会触发 refreshMap (清空场景)，必须排队执行 (QueuedConnection)
+    //    让当前的鼠标点击事件先执行完，下一轮循环再刷新地图
+    connect(mapWidget, &MapWidget::emptySpaceClicked, this, &EditorWindow::onEmptySpaceClicked, Qt::QueuedConnection);
+    
+    // 3. 只是显示连线面板，安全
     connect(mapWidget, &MapWidget::edgeConnectionRequested, this, &EditorWindow::onEdgeConnectionRequested);
-    connect(mapWidget, &MapWidget::nodeMoved, this, &EditorWindow::onNodeMoved);
-    connect(mapWidget, &MapWidget::undoRequested, this, &EditorWindow::onUndoRequested);
+    
+    // 4. 【关键】拖拽结束更新位置也会触发 refreshMap，必须排队
+    connect(mapWidget, &MapWidget::nodeMoved, this, &EditorWindow::onNodeMoved, Qt::QueuedConnection);
+    
+    // 5. 撤销操作建议也排队，比较稳妥
+    connect(mapWidget, &MapWidget::undoRequested, this, &EditorWindow::onUndoRequested, Qt::QueuedConnection);
+
+    // =========================================================
 
     // 初始刷新
     refreshMap();
     
-    // 默认进入浏览模式，防止误触
+    // 默认进入浏览模式
     mapWidget->setEditMode(EditMode::None);
 }
 
