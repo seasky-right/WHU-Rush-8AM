@@ -6,12 +6,61 @@
 #include <QtWidgets/QMessageBox>
 #include <QtCore/QDebug>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QFileInfo>
+#include <QtWidgets/QGraphicsDropShadowEffect>
+#include <QtWidgets/QScrollBar> 
+
+// ==========================================================================
+//  【辅助类】自动补零的 SpinBox (比如显示 08 而不是 8)
+// ==========================================================================
+class PadSpinBox : public QSpinBox {
+public:
+    using QSpinBox::QSpinBox; 
+protected:
+    // 重写显示逻辑：不足2位自动补0
+    QString textFromValue(int val) const override {
+        return QString("%1").arg(val, 2, 10, QChar('0'));
+    }
+};
+
+// ==========================================================================
+//  【资源】内嵌 SVG 图标 (已改为纯黑色 stroke='%23000000')
+// ==========================================================================
+
+// 下箭头 (纯黑)
+const QString ICON_CHEVRON_DOWN = 
+    "url(\"data:image/svg+xml;charset=utf-8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23000000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'>"
+    "<polyline points='6 9 12 15 18 9'></polyline>"
+    "</svg>\")";
+
+// 上箭头 (纯黑)
+const QString ICON_CHEVRON_UP = 
+    "url(\"data:image/svg+xml;charset=utf-8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23000000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'>"
+    "<polyline points='18 15 12 9 6 15'></polyline>"
+    "</svg>\")";
+
+// --------------------------------------------------------------------------
+//  全局滚动条样式
+// --------------------------------------------------------------------------
+const QString SCROLL_STYLE = 
+    "QScrollBar:vertical { background: transparent; width: 8px; margin: 0px; }"
+    "QScrollBar::handle:vertical { background: #C1C1C5; min-height: 20px; border-radius: 4px; }"
+    "QScrollBar::handle:vertical:hover { background: #8E8E93; }"
+    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
+    "QScrollBar:horizontal { background: transparent; height: 8px; margin: 0px; }"
+    "QScrollBar::handle:horizontal { background: #C1C1C5; min-width: 20px; border-radius: 4px; }"
+    "QScrollBar::handle:horizontal:hover { background: #8E8E93; }"
+    "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
+    "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }";
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     this->setWindowTitle("WHU Morning Rush - 早八冲锋号");
-    this->resize(1200, 800);
+    this->resize(1280, 850);
 
     model = new GraphModel();
     mapWidget = new MapWidget(this);
@@ -22,7 +71,6 @@ MainWindow::MainWindow(QWidget *parent)
     connect(mapWidget, &MapWidget::nodeClicked, this, &MainWindow::onMapNodeClicked);
     connect(openEditorBtn, &QPushButton::clicked, this, &MainWindow::onOpenEditor);
 
-    // 加载数据
     QString appDir = QCoreApplication::applicationDirPath();
     if (model->loadData(appDir + "/Data/nodes.txt", appDir + "/Data/edges.txt")) {
         mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
@@ -33,58 +81,204 @@ MainWindow::MainWindow(QWidget *parent)
     }
 }
 
-MainWindow::~MainWindow() { delete model; }
+MainWindow::~MainWindow() {
+    delete model;
+}
+
+// 辅助函数：创建美化的时间选择器 (时 : 分)
+QWidget* createTimeSpinner(QSpinBox*& spinHour, QSpinBox*& spinMin, QTime defaultTime) {
+    QWidget* container = new QWidget();
+    QHBoxLayout* layout = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    auto setupSpin = [](QSpinBox* spin, int max) {
+        spin->setRange(0, max);
+        spin->setAlignment(Qt::AlignCenter);
+        spin->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
+        
+        spin->setStyleSheet(
+            "QSpinBox { "
+            "    background-color: #FFFFFF; "
+            "    border: 1px solid #D1D1D6; "
+            "    border-radius: 8px; "
+            "    padding: 8px 4px; "
+            "    font-size: 16px; color: #1C1C1E; font-weight: bold;"
+            "}"
+            "QSpinBox:focus { border: 2px solid #007AFF; }"
+            
+            // 按钮区域
+            "QSpinBox::up-button, QSpinBox::down-button { "
+            "    width: 24px; " 
+            "    background: transparent; "
+            "    border: none; "
+            "    border-left: 1px solid #F2F2F7; " 
+            "}"
+            "QSpinBox::up-button:hover, QSpinBox::down-button:hover { "
+            "    background-color: #E5E5EA; "
+            "}"
+            
+            // 使用黑色 SVG 图标
+            "QSpinBox::up-arrow { "
+            "    image: " + ICON_CHEVRON_UP + "; "
+            "    width: 10px; height: 10px; "
+            "}"
+            "QSpinBox::down-arrow { "
+            "    image: " + ICON_CHEVRON_DOWN + "; "
+            "    width: 10px; height: 10px; "
+            "}"
+        );
+    };
+
+    // 【修改 2】使用 PadSpinBox 替代 QSpinBox 以支持自动补零
+    spinHour = new PadSpinBox();
+    setupSpin(spinHour, 23);
+    spinHour->setValue(defaultTime.hour());
+    
+    spinMin = new PadSpinBox();
+    setupSpin(spinMin, 59);
+    spinMin->setValue(defaultTime.minute());
+
+    QLabel* sep = new QLabel(":");
+    sep->setStyleSheet("font-size: 20px; font-weight: bold; color: #C7C7CC; margin-bottom: 2px;");
+
+    layout->addWidget(spinHour, 1);
+    layout->addWidget(sep);
+    layout->addWidget(spinMin, 1);
+    
+    return container;
+}
 
 void MainWindow::setupUi()
 {
     QWidget* centralWidget = new QWidget(this);
     this->setCentralWidget(centralWidget);
+    
+    centralWidget->setStyleSheet("background-color: #F2F2F7;"); 
 
     QHBoxLayout* mainLayout = new QHBoxLayout(centralWidget);
+    mainLayout->setContentsMargins(24, 24, 24, 24); 
+    mainLayout->setSpacing(24);
 
-    // --- 左侧导航栏 ---
-    QGroupBox* controlPanel = new QGroupBox("通勤导航");
-    controlPanel->setFixedWidth(320);
+    // 1. 左侧控制面板
+    QFrame* controlPanel = new QFrame();
+    controlPanel->setFixedWidth(360);
+    controlPanel->setStyleSheet(
+        "QFrame { "
+        "    background-color: #FFFFFF; "
+        "    border-radius: 18px; "
+        "    border: 1px solid #FFFFFF; " 
+        "}"
+    );
+    
+    QGraphicsDropShadowEffect* shadow = new QGraphicsDropShadowEffect();
+    shadow->setBlurRadius(50);
+    shadow->setColor(QColor(0, 0, 0, 40)); 
+    shadow->setOffset(0, 12);
+    controlPanel->setGraphicsEffect(shadow);
+
     QVBoxLayout* panelLayout = new QVBoxLayout(controlPanel);
+    panelLayout->setContentsMargins(28, 32, 28, 32);
+    panelLayout->setSpacing(20);
 
-    // 1. 地点
-    panelLayout->addWidget(new QLabel("起点 (左键点击):"));
-    startEdit = new QLineEdit(); startEdit->setReadOnly(true);
+    QLabel* titleLabel = new QLabel("通勤规划");
+    titleLabel->setStyleSheet("font-size: 28px; font-weight: 800; color: #1C1C1E; border: none; background: transparent;");
+    panelLayout->addWidget(titleLabel);
+    
+    panelLayout->addSpacing(8);
+
+    auto setupInput = [](QWidget* w, QString placeholder) {
+        w->setStyleSheet(
+            "QLineEdit, QComboBox { "
+            "    background-color: #FFFFFF; "
+            "    border: 1px solid #D1D1D6; " 
+            "    border-radius: 8px; "
+            "    padding: 10px 12px; "
+            "    font-size: 14px; "
+            "    color: #1C1C1E; "
+            "}"
+            "QLineEdit:focus, QComboBox:focus { "
+            "    border: 2px solid #007AFF; "
+            "}"
+            "QComboBox::drop-down { border: none; width: 32px; }"
+            "QComboBox::down-arrow { "
+            "    image: " + ICON_CHEVRON_DOWN + "; "
+            "    width: 12px; height: 12px; "
+            "}"
+        );
+        if (auto* le = qobject_cast<QLineEdit*>(w)) le->setPlaceholderText(placeholder);
+    };
+
+    auto createLabel = [](QString text) {
+        QLabel* l = new QLabel(text);
+        l->setStyleSheet("color: #8E8E93; font-size: 13px; font-weight: 600; border: none; background: transparent; margin-bottom: 4px;");
+        return l;
+    };
+
+    // 起终点
+    panelLayout->addWidget(createLabel("起点 (START)"));
+    startEdit = new QLineEdit(); 
+    startEdit->setReadOnly(true);
+    setupInput(startEdit, "👆 左键点击地图选点");
     panelLayout->addWidget(startEdit);
 
-    panelLayout->addWidget(new QLabel("终点 (右键点击):"));
-    endEdit = new QLineEdit(); endEdit->setReadOnly(true);
+    panelLayout->addWidget(createLabel("终点 (END)"));
+    endEdit = new QLineEdit(); 
+    endEdit->setReadOnly(true);
+    setupInput(endEdit, "👆 右键点击地图选点");
     panelLayout->addWidget(endEdit);
-    panelLayout->addSpacing(15);
-    
-    // 2. 环境
-    QGroupBox* envBox = new QGroupBox("环境设定");
-    QVBoxLayout* envLayout = new QVBoxLayout(envBox);
 
-    envLayout->addWidget(new QLabel("今日天气:"));
+    // 环境 Grid
+    QGridLayout* envGrid = new QGridLayout();
+    envGrid->setSpacing(16);
+
+    envGrid->addWidget(createLabel("今日天气"), 0, 0);
     weatherCombo = new QComboBox();
-    weatherCombo->addItems({"☀️ 晴朗 (Sunny)", "🌧️ 下雨 (Rainy)", "❄️ 大雪 (Snowy)"});
-    envLayout->addWidget(weatherCombo);
+    // 【修改 1】去掉了英文，只保留 emoji 和中文
+    weatherCombo->addItems({"☀️ 晴朗", "🌧️ 下雨", "❄️ 大雪"});
+    weatherCombo->setCursor(Qt::PointingHandCursor);
+    setupInput(weatherCombo, "");
+    envGrid->addWidget(weatherCombo, 1, 0);
 
-    envLayout->addWidget(new QLabel("当前时间:"));
-    timeCurrentEdit = new QTimeEdit(QTime::currentTime());
-    timeCurrentEdit->setDisplayFormat("HH:mm");
-    envLayout->addWidget(timeCurrentEdit);
+    envGrid->addWidget(createLabel("当前时间"), 0, 1);
+    QWidget* currTimeWidget = createTimeSpinner(spinCurrHour, spinCurrMin, QTime::currentTime());
+    envGrid->addWidget(currTimeWidget, 1, 1);
 
-    envLayout->addWidget(new QLabel("上课时间:"));
-    timeClassEdit = new QTimeEdit(QTime(8, 0)); 
-    timeClassEdit->setDisplayFormat("HH:mm");
-    envLayout->addWidget(timeClassEdit);
-    panelLayout->addWidget(envBox);
+    panelLayout->addLayout(envGrid);
+
+    // 上课时间
+    panelLayout->addWidget(createLabel("早八/打卡时间"));
+    QHBoxLayout* classTimeLayout = new QHBoxLayout();
+    
+    QWidget* classTimeWidget = createTimeSpinner(spinClassHour, spinClassMin, QTime(8, 0));
+    classTimeLayout->addWidget(classTimeWidget, 1);
+
+    // 复选框
+    lateCheckToggle = new QCheckBox("迟到预警");
+    lateCheckToggle->setChecked(true);
+    lateCheckToggle->setCursor(Qt::PointingHandCursor);
+    lateCheckToggle->setStyleSheet(
+        "QCheckBox { "
+        "    color: #3A3A3C; "
+        "    font-size: 14px; "
+        "    font-weight: 500; "
+        "    border: none; "
+        "    background: transparent; "
+        "    margin-left: 10px;"
+        "}"
+    );
+    classTimeLayout->addWidget(lateCheckToggle);
+    panelLayout->addLayout(classTimeLayout);
+
     panelLayout->addSpacing(15);
 
-    // 3. [修改] 交通工具按钮组
-    QLabel* modeLabel = new QLabel("选择出行方式:");
-    modeLabel->setStyleSheet("font-weight: bold; margin-bottom: 5px;");
-    panelLayout->addWidget(modeLabel);
+    // 交通工具
+    QLabel* modeTitle = new QLabel("选择出行方式");
+    modeTitle->setStyleSheet("font-size: 16px; font-weight: bold; color: #1C1C1E; border: none; background: transparent;");
+    panelLayout->addWidget(modeTitle);
 
-    // 使用 Grid 布局或 HBox 布局来排列按钮
     QGridLayout* btnLayout = new QGridLayout();
+    btnLayout->setSpacing(12);
     
     btnWalk = new QPushButton("🚶 步行");
     btnBike = new QPushButton("🚲 单车");
@@ -92,15 +286,8 @@ void MainWindow::setupUi()
     btnRun = new QPushButton("🏃 跑步");
     btnBus = new QPushButton("🚌 校车");
 
-    // 简单的样式设置
-    QString btnStyle = "QPushButton { padding: 8px; font-weight: bold; border-radius: 4px; background-color: #F0F2F5; border: 1px solid #DCDFE6; } QPushButton:hover { background-color: #E6E8EB; }";
-    btnWalk->setStyleSheet(btnStyle);
-    btnBike->setStyleSheet(btnStyle);
-    btnEBike->setStyleSheet(btnStyle);
-    btnRun->setStyleSheet(btnStyle);
-    btnBus->setStyleSheet(btnStyle);
+    resetAllButtonStyles(); // 应用初始样式
 
-    // 排列：第一行3个，第二行2个
     btnLayout->addWidget(btnWalk, 0, 0);
     btnLayout->addWidget(btnBike, 0, 1);
     btnLayout->addWidget(btnEBike, 0, 2);
@@ -109,50 +296,114 @@ void MainWindow::setupUi()
 
     panelLayout->addLayout(btnLayout);
 
-    // 信号连接
     connect(btnWalk, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::Walk); });
     connect(btnBike, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::SharedBike); });
     connect(btnEBike, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::EBike); });
     connect(btnRun, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::Run); });
     connect(btnBus, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::Bus); });
 
-    panelLayout->addSpacing(20);
+    panelLayout->addSpacing(15);
     
-    // 4. 结果列表
-    QLabel* routeLabel = new QLabel("规划结果:");
-    routeLabel->setStyleSheet("font-weight: bold;");
-    panelLayout->addWidget(routeLabel);
+    // 结果区
+    panelLayout->addWidget(createLabel("规划结果"));
     
     routeScrollArea = new QScrollArea();
     routeScrollArea->setWidgetResizable(true);
+    routeScrollArea->setStyleSheet("QScrollArea { border: none; background-color: transparent; }" + SCROLL_STYLE);
+    
     routePanelWidget = new QWidget();
+    routePanelWidget->setStyleSheet("background-color: transparent;");
     routePanelLayout = new QVBoxLayout(routePanelWidget);
     routePanelLayout->setAlignment(Qt::AlignTop);
+    routePanelLayout->setContentsMargins(0,0,0,0);
+    routePanelLayout->setSpacing(12);
+    
     routeScrollArea->setWidget(routePanelWidget);
     panelLayout->addWidget(routeScrollArea, 1);
 
-    // 5. 底部
-    panelLayout->addSpacing(10);
-    openEditorBtn = new QPushButton("🛠️ 打开编辑器");
+    // 底部工具按钮
+    openEditorBtn = new QPushButton("🛠️ 进入地图编辑器");
+    openEditorBtn->setCursor(Qt::PointingHandCursor);
+    openEditorBtn->setStyleSheet(
+        "QPushButton { "
+        "    background-color: #F2F2F7; "
+        "    color: #007AFF; "
+        "    border: none; " 
+        "    border-radius: 10px; "
+        "    padding: 12px; "
+        "    font-weight: bold; "
+        "    font-size: 14px; "
+        "} "
+        "QPushButton:hover { background-color: #E5E5EA; }"
+        "QPushButton:pressed { background-color: #D1D1D6; }"
+    );
     panelLayout->addWidget(openEditorBtn);
 
-    statusLabel = new QLabel("就绪");
-    statusLabel->setStyleSheet("color: gray;");
+    statusLabel = new QLabel("Ready to go.");
+    statusLabel->setAlignment(Qt::AlignCenter);
+    statusLabel->setStyleSheet("color: #8E8E93; font-size: 11px; border: none; background: transparent;");
     panelLayout->addWidget(statusLabel);
 
     mainLayout->addWidget(controlPanel);
     mainLayout->addWidget(mapWidget, 1);
 }
 
-void MainWindow::onMapNodeClicked(int nodeId, QString name, bool isLeftClick) {
+void MainWindow::onMapNodeClicked(int nodeId, QString name, bool isLeftClick)
+{
     if (isLeftClick) {
-        startEdit->setText(name); currentStartId = nodeId; statusLabel->setText("起点: " + name);
+        startEdit->setText(name);
+        currentStartId = nodeId;
+        statusLabel->setText("已设置起点");
     } else {
-        endEdit->setText(name); currentEndId = nodeId; statusLabel->setText("终点: " + name);
+        endEdit->setText(name);
+        currentEndId = nodeId;
+        statusLabel->setText("已设置终点");
     }
 }
 
-// [新增] 核心搜索逻辑
+void MainWindow::resetAllButtonStyles() {
+    updateButtonStyle(btnWalk, false, false);
+    updateButtonStyle(btnBike, false, false);
+    updateButtonStyle(btnEBike, false, false);
+    updateButtonStyle(btnRun, false, false);
+    updateButtonStyle(btnBus, false, false);
+}
+
+void MainWindow::updateButtonStyle(QPushButton* btn, bool isSelected, bool isLate) {
+    if (!btn) return;
+
+    QString style;
+    QString base = "border-radius: 10px; padding: 12px 0px; font-weight: bold; font-size: 13px; ";
+
+    if (!isSelected) {
+        // 未选中：浅灰背景
+        style = "QPushButton { "
+                "    background-color: #F7F7F9; "
+                "    color: #3A3A3C; "
+                "    border: 1px solid #E5E5EA; " + base +
+                "} "
+                "QPushButton:hover { background-color: #FFFFFF; border-color: #C7C7CC; }";
+    } else {
+        if (isLate) {
+            // 迟到：浅红背景
+            style = "QPushButton { "
+                    "    background-color: #FFEBEE; " 
+                    "    color: #C62828; "            
+                    "    border: 1px solid #FFCDD2; " + base +
+                    "}";
+        } else {
+            // 准时：浅绿背景
+            style = "QPushButton { "
+                    "    background-color: #E8F5E9; " 
+                    "    color: #2E7D32; "            
+                    "    border: 1px solid #C8E6C9; " + base +
+                    "}";
+        }
+    }
+    btn->setStyleSheet(style);
+    btn->setCursor(Qt::PointingHandCursor);
+}
+
 void MainWindow::onModeSearch(TransportMode mode) {
     if (currentStartId == -1 || currentEndId == -1) {
         QMessageBox::warning(this, "提示", "请先在地图上选择起点(左键)和终点(右键)！");
@@ -164,27 +415,48 @@ void MainWindow::onModeSearch(TransportMode mode) {
     if (idx == 1) w = Weather::Rainy;
     if (idx == 2) w = Weather::Snowy;
 
-    QTime curTime = timeCurrentEdit->time();
-    QTime clsTime = timeClassEdit->time();
-
-    statusLabel->setText("规划中...");
+    QTime curTime(spinCurrHour->value(), spinCurrMin->value());
+    QTime clsTime(spinClassHour->value(), spinClassMin->value());
     
-    // 获取单条推荐
+    bool checkLate = lateCheckToggle->isChecked();
+
+    statusLabel->setText("正在规划路线...");
+    
+    resetAllButtonStyles();
+
     PathRecommendation rec = model->getSpecificRoute(
-        currentStartId, currentEndId, mode, w, curTime, clsTime
+        currentStartId, currentEndId, mode, w, curTime, clsTime, checkLate
     );
 
+    QPushButton* currentBtn = nullptr;
+    switch (mode) {
+        case TransportMode::Walk: currentBtn = btnWalk; break;
+        case TransportMode::SharedBike: currentBtn = btnBike; break;
+        case TransportMode::EBike: currentBtn = btnEBike; break;
+        case TransportMode::Run: currentBtn = btnRun; break;
+        case TransportMode::Bus: currentBtn = btnBus; break;
+    }
+
+    if (currentBtn) {
+        bool showRedAlert = rec.isLate;
+        if (rec.pathNodeIds.isEmpty()) showRedAlert = false;
+        updateButtonStyle(currentBtn, true, showRedAlert);
+    }
+
     QVector<PathRecommendation> results;
-    // 只有路径非空才展示
     if (!rec.pathNodeIds.isEmpty()) {
         results.append(rec);
-        statusLabel->setText("规划成功");
+        QString statusText = QString("规划成功: %1").arg(rec.typeName);
+        if (checkLate) {
+            if (rec.isLate) statusText += " (⚠️ 预计迟到)";
+            else statusText += " (✅ 时间充裕)";
+        }
+        statusLabel->setText(statusText);
     } else {
-        statusLabel->setText("该方式无可行路线 (可能受天气或地形限制)");
+        statusLabel->setText("该方式无可行路线");
         QMessageBox::information(this, "提示", "该交通方式下无可行路线。\n原因可能是：\n1. 雪天禁行\n2. 楼梯阻断了车辆\n3. 孤立节点");
     }
     
-    // 复用之前的展示逻辑
     displayRouteRecommendations(results);
 }
 
@@ -198,7 +470,6 @@ void MainWindow::displayRouteRecommendations(const QVector<PathRecommendation>& 
         connect(btn, &RouteButton::routeHovered, this, &MainWindow::onRouteHovered);
         connect(btn, &RouteButton::routeUnhovered, this, &MainWindow::onRouteUnhovered);
     }
-    // 如果有结果，默认高亮第一条
     if (!recommendations.isEmpty()) {
         mapWidget->highlightPath(recommendations[0].pathNodeIds, 1.0);
     } else {
@@ -225,8 +496,6 @@ void MainWindow::onRouteHovered(const PathRecommendation& recommendation) {
     mapWidget->highlightPath(recommendation.pathNodeIds, 0.8);
 }
 void MainWindow::onRouteUnhovered() { 
-    // 不再清除，保留点击选中的状态，或者根据需求清除
-    // mapWidget->clearPathHighlight(); 
 }
 
 void MainWindow::onOpenEditor() {

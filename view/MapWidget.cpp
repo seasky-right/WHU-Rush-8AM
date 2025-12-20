@@ -2,7 +2,7 @@
 #include <QtWidgets/QGraphicsEllipseItem>
 #include <QtWidgets/QGraphicsLineItem>
 #include <QtWidgets/QGraphicsTextItem>
-#include <QtWidgets/QGraphicsObject> // 必须包含
+#include <QtWidgets/QGraphicsObject> 
 #include "HoverBubble.h"
 #include <QtGui/QMouseEvent>
 #include <QtCore/QDebug>
@@ -16,11 +16,9 @@
 #include <QtGui/QRadialGradient>
 #include <QtWidgets/QGraphicsDropShadowEffect>
 #include <limits>
+#include <algorithm>
 
-// =============================================================
-//  内部辅助类：必须继承自 QGraphicsObject 才能支持 QPropertyAnimation
-// =============================================================
-
+// ... 辅助类 HaloItem 和 GlowItem (保持不变，此处保留以供全选) ...
 class HaloItem : public QGraphicsObject {
 public:
     HaloItem(const QPointF& center, double radius, QGraphicsItem* parent = nullptr)
@@ -71,9 +69,9 @@ private:
     double m_width;
 };
 
-// =============================================================
+// =========================================================
 //  MapWidget 实现
-// =============================================================
+// =========================================================
 
 MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
 {
@@ -84,10 +82,28 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     this->setRenderHint(QPainter::SmoothPixmapTransform);
     this->setRenderHint(QPainter::TextAntialiasing);
     
-    this->setBackgroundBrush(QBrush(QColor("#F5F5F7")));
+    this->setBackgroundBrush(QBrush(QColor("#F5F5F7"))); 
     
     this->setMouseTracking(true);
     this->setDragMode(QGraphicsView::NoDrag);
+    
+    // 【核心修复】强制设置 MapWidget 自身的滚动条样式
+    // 之前可能因为 QGraphicsView 的特殊性没生效，这次直接对子控件设置
+    QString scrollStyle = 
+        "QScrollBar:vertical { background: transparent; width: 8px; margin: 0px; }"
+        "QScrollBar::handle:vertical { background: #C1C1C5; min-height: 20px; border-radius: 4px; }"
+        "QScrollBar::handle:vertical:hover { background: #8E8E93; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
+        
+        "QScrollBar:horizontal { background: transparent; height: 8px; margin: 0px; }"
+        "QScrollBar::handle:horizontal { background: #C1C1C5; min-width: 20px; border-radius: 4px; }"
+        "QScrollBar::handle:horizontal:hover { background: #8E8E93; }"
+        "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }"
+        "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }";
+
+    this->verticalScrollBar()->setStyleSheet(scrollStyle);
+    this->horizontalScrollBar()->setStyleSheet(scrollStyle);
     
     animationTimer = new QTimer(this);
     connect(animationTimer, &QTimer::timeout, this, &MapWidget::onAnimationTick);
@@ -115,9 +131,6 @@ void MapWidget::stopHoverAnimations() {
 
 void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 {
-    // =========================================================
-    // 1. 清理场景 (保持原样)
-    // =========================================================
     if (animationTimer->isActive()) animationTimer->stop();
     stopHoverAnimations();
 
@@ -145,16 +158,6 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
     QMap<int, Node> nodeMap;
     for(const auto& node : nodes) nodeMap.insert(node.id, node);
 
-    // =========================================================
-    // 2. 绘制边 (这里进行了修改)
-    // =========================================================
-    
-    // --- 原有代码：统一样式定义 (保留但不再主要使用) ---
-    QPen edgePen(QColor("#C7C7CC")); 
-    edgePen.setWidth(2);
-    edgePen.setCapStyle(Qt::RoundCap);
-    // ------------------------------------------------
-
     QPen activeEdgePen(QColor("#007AFF"));
     activeEdgePen.setWidth(4);
     activeEdgePen.setCapStyle(Qt::RoundCap);
@@ -172,32 +175,18 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
                 }
             }
 
-            // ================== 修改区域开始 ==================
-
-            /* // [原有代码备份]：无论什么类型，都使用统一的灰色 edgePen
-            auto line = scene->addLine(start.x, start.y, end.x, end.y, isActiveEdge ? activeEdgePen : edgePen);
-            line->setZValue(isActiveEdge ? 5 : 0); 
-            */
-
-            // [新代码]：调用 edgePenForType 获取特定颜色 (楼梯=橙色, 主干道=蓝色等)
             QPen drawPen = isActiveEdge ? activeEdgePen : edgePenForType(edge.type);
             auto line = scene->addLine(start.x, start.y, end.x, end.y, drawPen);
             
-            // [新代码]：调整层级，避免楼梯被普通路覆盖
             int z = 0;
             if (edge.type == EdgeType::Main) z = 1;
-            if (edge.type == EdgeType::Stairs) z = 2; // 楼梯画在上面
-            if (isActiveEdge) z = 5; // 选中的最高
+            if (edge.type == EdgeType::Stairs) z = 2; 
+            if (isActiveEdge) z = 5; 
             
             line->setZValue(z);
-
-            // ================== 修改区域结束 ==================
         }
     }
 
-    // =========================================================
-    // 3. 连线预览 (保持原样)
-    // =========================================================
     if (currentMode == EditMode::ConnectEdge && connectFirstNodeId != -1 && hoveredNodeId != -1 && connectFirstNodeId != hoveredNodeId) {
         if (nodeMap.contains(connectFirstNodeId) && nodeMap.contains(hoveredNodeId)) {
             Node start = nodeMap[connectFirstNodeId];
@@ -210,16 +199,13 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         }
     }
 
-    // =========================================================
-    // 4. 绘制节点 (保持原样)
-    // =========================================================
-    QColor colorNormal("#8E8E93");     
+    QColor colorNormal("#636366"); 
     QColor colorActive("#007AFF");     
-    QColor colorGhost("#E5E5EA");      
+    QColor colorGhost("#AEAEB2");  
     
-    QFont nameFont("PingFang SC", 9);  
+    QFont nameFont("PingFang SC", 11);  
     if (!QFontInfo(nameFont).exactMatch()) nameFont.setFamily("Microsoft YaHei");
-    nameFont.setWeight(QFont::DemiBold);
+    nameFont.setWeight(QFont::Bold);
 
     for(const auto& node : nodes) {
         bool isGhost = (node.type == NodeType::Ghost);
@@ -231,14 +217,14 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         bool isDragging = (isNodeDragging && node.id == draggingNodeId);
         bool isHighlight = isStart || isTarget || isActiveEndpoint || isDragging;
 
-        double r = isGhost ? 4.0 : 6.0;
+        double r = isGhost ? 7.0 : 12.0; 
         int zValue = isGhost ? 5 : 10;
         QColor fillColor = isGhost ? colorGhost : colorNormal;
-        QColor strokeColor = isGhost ? QColor(200,200,200) : Qt::white;
-        double strokeWidth = 2.0;
+        QColor strokeColor = isGhost ? QColor(180,180,180) : Qt::white;
+        double strokeWidth = 3.0;
 
         if (isHighlight) {
-            double haloR = r + 6.0;
+            double haloR = r + 8.0; 
             QColor haloColor = colorActive; 
             haloColor.setAlpha(80); 
             auto halo = scene->addEllipse(node.x - haloR, node.y - haloR, haloR*2, haloR*2, Qt::NoPen, QBrush(haloColor));
@@ -246,8 +232,8 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             
             fillColor = colorActive;
             strokeColor = Qt::white; 
-            strokeWidth = 3.0;      
-            r += 1.0;               
+            strokeWidth = 4.0;      
+            r += 2.0;
             zValue = 100;           
         } 
 
@@ -260,9 +246,9 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         
         if (!isGhost || isHighlight) {
             auto* effect = new QGraphicsDropShadowEffect();
-            effect->setBlurRadius(isHighlight ? 12 : 6);
-            effect->setOffset(0, 2);
-            effect->setColor(QColor(0, 0, 0, isHighlight ? 80 : 30));
+            effect->setBlurRadius(isHighlight ? 15 : 8);
+            effect->setOffset(0, 3);
+            effect->setColor(QColor(0, 0, 0, isHighlight ? 80 : 40));
             item->setGraphicsEffect(effect);
         }
 
@@ -271,12 +257,12 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             text->setFont(nameFont);
             text->setDefaultTextColor(isHighlight ? colorActive : QColor("#1C1C1E")); 
             QRectF bd = text->boundingRect();
-            text->setPos(node.x - bd.width()/2.0, node.y + r + 4);
+            text->setPos(node.x - bd.width()/2.0, node.y + r + 6);
             text->setZValue(zValue); 
             text->setAcceptedMouseButtons(Qt::NoButton); 
             
             if (isHighlight) {
-                QFont f = text->font(); f.setBold(true); text->setFont(f);
+                QFont f = text->font(); f.setWeight(QFont::Black); text->setFont(f);
             }
             nodeLabelItems.insert(node.id, text);
         }
@@ -291,10 +277,6 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         if(minX < maxX) scene->setSceneRect(minX-50, minY-50, maxX-minX+100, maxY-minY+100);
     }
 }
-
-// ---------------------------------------------------------
-//   悬停气泡与动画 (修复版)
-// ---------------------------------------------------------
 
 void MapWidget::clearHoverItems() {
     for (int nid : hiddenLabelNodeIds) if (nodeLabelItems.contains(nid) && nodeLabelItems[nid]) nodeLabelItems[nid]->setVisible(true);
@@ -318,7 +300,7 @@ void MapWidget::fadeOutHoverItems() {
     for (int nid : hiddenLabelNodeIds) if (nodeLabelItems.contains(nid) && nodeLabelItems[nid]) nodeLabelItems[nid]->setVisible(true);
     hiddenLabelNodeIds.clear();
 
-    stopHoverAnimations(); // 停止旧动画
+    stopHoverAnimations(); 
 
     dyingItems.append(hoverItems);
     hoverItems.clear();
@@ -327,8 +309,6 @@ void MapWidget::fadeOutHoverItems() {
     for (auto* it : dyingItems) {
         if (!it) continue;
 
-        // 【修复编译错误】: 只有当 item 是 QGraphicsObject 时才能使用 QPropertyAnimation
-        // HaloItem, GlowItem, HoverBubble 都是 QGraphicsObject
         QGraphicsObject* obj = dynamic_cast<QGraphicsObject*>(it);
         if (obj) {
             auto* a_op = new QPropertyAnimation(obj, "opacity", this);
@@ -337,7 +317,6 @@ void MapWidget::fadeOutHoverItems() {
             a_op->setEndValue(0.0);
             group->addAnimation(a_op);
 
-            // 仅气泡缩放
             HoverBubble* hb = qobject_cast<HoverBubble*>(obj);
             if (hb) {
                 auto* a_sc = new QPropertyAnimation(hb, "bubbleScale", this);
@@ -347,7 +326,6 @@ void MapWidget::fadeOutHoverItems() {
                 group->addAnimation(a_sc);
             }
         } else {
-            // 如果不是 QObject (理论上不应发生)，直接移除
             scene->removeItem(it);
             delete it;
         }
@@ -371,7 +349,6 @@ void MapWidget::startHoverAppearAnimation() {
         if (!it) continue;
         it->setOpacity(0.0);
 
-        // 【修复编译错误】: 强制转换为 QGraphicsObject*
         QGraphicsObject* obj = dynamic_cast<QGraphicsObject*>(it);
         if (obj) {
             auto* a_op = new QPropertyAnimation(obj, "opacity", this);
@@ -403,8 +380,7 @@ void MapWidget::showNodeHoverBubble(const Node& node) {
     killDyingItems();
     clearHoverItems(); 
     
-    // HaloItem 是 QGraphicsObject
-    auto* halo = new HaloItem(QPointF(node.x, node.y), 25.0);
+    auto* halo = new HaloItem(QPointF(node.x, node.y), 45.0); 
     scene->addItem(halo);
     hoverItems.push_back(halo);
 
@@ -415,6 +391,13 @@ void MapWidget::showNodeHoverBubble(const Node& node) {
     hb->setContent(node.name, node.description);
     hb->setCenterAt(QPointF(node.x, node.y));
     hb->setZValue(100);
+    
+    double screenW = this->viewport()->width();
+    currentBubbleScale = (screenW / 1280.0) * 1.8; 
+    currentBubbleScale = std::clamp(currentBubbleScale, 1.2, 3.0); 
+    
+    hb->setBubbleScale(currentBubbleScale);
+
     scene->addItem(hb);
     hoverItems.push_back(hb);
     
@@ -435,8 +418,7 @@ void MapWidget::showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoin
     if (!nodeMap.contains(edge.u) || !nodeMap.contains(edge.v)) return;
     Node u = nodeMap[edge.u]; Node v = nodeMap[edge.v];
     
-    // GlowItem 是 QGraphicsObject
-    auto* glow = new GlowItem(QPointF(u.x, u.y), QPointF(v.x, v.y), 12.0);
+    auto* glow = new GlowItem(QPointF(u.x, u.y), QPointF(v.x, v.y), 24.0); 
     scene->addItem(glow);
     hoverItems.push_back(glow);
 
@@ -451,15 +433,17 @@ void MapWidget::showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoin
     QPointF A(u.x, u.y), B(v.x, v.y);
     hb->setEdgeLine(A, B);
     hb->setZValue(100);
+    
+    double screenW = this->viewport()->width();
+    currentBubbleScale = (screenW / 1280.0) * 1.8;
+    currentBubbleScale = std::clamp(currentBubbleScale, 1.2, 3.0);
+    hb->setBubbleScale(currentBubbleScale);
+
     scene->addItem(hb);
     hoverItems.push_back(hb);
     
     startHoverAppearAnimation();
 }
-
-// ---------------------------------------------------------
-//   常规函数
-// ---------------------------------------------------------
 
 void MapWidget::setEditMode(EditMode mode)
 {
@@ -654,6 +638,8 @@ void MapWidget::mouseReleaseEvent(QMouseEvent *event)
 
 void MapWidget::wheelEvent(QWheelEvent *event)
 {
+    fadeOutHoverItems(); 
+
     double viewW = viewport()->width();
     double viewH = viewport()->height();
     double sceneW = scene->width();
@@ -832,7 +818,7 @@ void MapWidget::leaveEvent(QEvent *event) {
 }
 
 int MapWidget::findNodeAt(const QPointF& pos) {
-    double threshold = 20.0;
+    double threshold = 30.0; 
     for(const auto& node : cachedNodes) {
         if (node.type == NodeType::Ghost && currentMode == EditMode::None) continue;
         double dx = pos.x() - node.x; double dy = pos.y() - node.y;
@@ -845,7 +831,8 @@ int MapWidget::findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, 
     if (cachedEdges.isEmpty() || cachedNodes.isEmpty()) return -1;
     QMap<int, Node> nodeMap; for (const auto& n : cachedNodes) nodeMap.insert(n.id, n);
     int bestIdx = -1; double bestDist = 1e18; QPointF bestPt;
-    int bu=-1, bv=-1; const double threshold = 10.0;
+    int bu=-1, bv=-1; 
+    const double threshold = 20.0; 
     for (int i = 0; i < cachedEdges.size(); ++i) {
         const auto& e = cachedEdges[i];
         if (!nodeMap.contains(e.u) || !nodeMap.contains(e.v)) continue;
@@ -864,24 +851,23 @@ int MapWidget::findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, 
 }
 
 QPen MapWidget::edgePenForType(EdgeType type) const {
-    QColor c(200,200,200); 
+    // 【修改】普通道路颜色加深：#A0A0A5 (中深灰)
+    QColor c(160, 160, 165); 
     int width = 3;
     
     switch (type) {
     case EdgeType::Normal: 
-        c = QColor(220,220,220); width = 3; 
+        c = QColor(160, 160, 165); width = 3; 
         break;
     case EdgeType::Main:   
-        c = QColor(180,200,230); width = 4; 
+        c = QColor(160, 190, 220); width = 4; 
         break;
     case EdgeType::Path:   
-        c = QColor(180,220,180); width = 2; 
+        c = QColor(160, 200, 160); width = 2; 
         break;
     case EdgeType::Indoor: 
-        c = QColor(230,200,180); width = 2; 
+        c = QColor(210, 180, 160); width = 2; 
         break;
-        
-    // 【新增】楼梯样式：显眼的橙色
     case EdgeType::Stairs: 
         c = QColor(255, 149, 0); width = 2; 
         break; 
@@ -891,10 +877,6 @@ QPen MapWidget::edgePenForType(EdgeType type) const {
     pen.setWidth(width);
     pen.setJoinStyle(Qt::RoundJoin); 
     pen.setCapStyle(Qt::RoundCap);
-    
-    // 如果你想让楼梯变成虚线，可以把下面这行注释取消掉
-    // if (type == EdgeType::Stairs) pen.setStyle(Qt::DashLine);
-
     return pen;
 }
 
@@ -902,7 +884,8 @@ void MapWidget::addEditVisualNode(int id, const QString& name, const QPointF& po
     NodeType type = (typeInt == 9) ? NodeType::Ghost : NodeType::Visible;
     QPen p(type == NodeType::Ghost ? QColor(140,140,160) : QColor("#007AFF"));
     QBrush b(type == NodeType::Ghost ? QColor(230,230,240) : QColor("#007AFF"));
-    double r = (type == NodeType::Ghost) ? 5.0 : 8.0;
+    
+    double r = (type == NodeType::Ghost) ? 8.0 : 12.0; 
     
     auto* item = scene->addEllipse(pos.x()-r, pos.y()-r, 2*r, 2*r, p, b);
     item->setZValue(12);

@@ -6,10 +6,10 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QVBoxLayout>
-#include <QtWidgets/QHBoxLayout> // [新增]
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
-#include <QtWidgets/QTimeEdit>
+#include <QtWidgets/QSpinBox> // 替换 QTimeEdit
 #include <QtCore/QVector>
 #include "../model/GraphModel.h"
 #include "MapWidget.h"
@@ -25,10 +25,7 @@ public:
 
 private slots:
     void onMapNodeClicked(int nodeId, QString name, bool isLeftClick);
-    
-    // [修改] 统一的模式搜索槽函数
     void onModeSearch(TransportMode mode);
-    
     void onRouteButtonClicked(int routeIndex);
     void onRouteHovered(const PathRecommendation& recommendation);
     void onRouteUnhovered();
@@ -39,23 +36,30 @@ private:
     GraphModel* model;
     MapWidget* mapWidget;
 
+    // 左侧控件
     QLineEdit* startEdit;
     QLineEdit* endEdit;
-    
     QComboBox* weatherCombo;
-    QTimeEdit* timeCurrentEdit;
-    QTimeEdit* timeClassEdit;
+    
+    // 【修改】拆分时间选择器为 时/分 SpinBox
+    QSpinBox* spinCurrHour;
+    QSpinBox* spinCurrMin;
+    QSpinBox* spinClassHour;
+    QSpinBox* spinClassMin;
+    
+    QCheckBox* lateCheckToggle;
 
-    // [修改] 分开的交通工具按钮
+    // 交通工具按钮
     QPushButton* btnWalk;
     QPushButton* btnBike;
     QPushButton* btnEBike;
     QPushButton* btnRun;
     QPushButton* btnBus;
 
-    QLabel* statusLabel;
     QPushButton* openEditorBtn;
+    QLabel* statusLabel;
 
+    // 结果面板
     QWidget* routePanelWidget;
     QScrollArea* routeScrollArea;
     QVBoxLayout* routePanelLayout;
@@ -68,4 +72,6 @@ private:
     void setupUi();
     void displayRouteRecommendations(const QVector<PathRecommendation>& recommendations);
     void clearRoutePanel();
+    void resetAllButtonStyles();
+    void updateButtonStyle(QPushButton* btn, bool isSelected, bool isLate);
 };

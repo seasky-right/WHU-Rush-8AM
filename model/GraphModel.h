@@ -52,7 +52,8 @@ public:
                                       TransportMode mode,
                                       Weather weather, 
                                       QTime currentTime, 
-                                      QTime classTime);
+                                      QTime classTime,
+                                      bool enableLateCheck);
 
     double calculateDistance(const QVector<int>& pathNodeIds) const;
     double calculateDuration(const QVector<int>& pathNodeIds, TransportMode mode, Weather weather) const;
@@ -83,8 +84,17 @@ private:
 
     // 【新增】内部辅助函数：执行自动保存
     void autoSave() {
-        if (!m_nodesPath.isEmpty() && !m_edgesPath.isEmpty()) {
-            saveData(m_nodesPath, m_edgesPath);
+        // 【修复】检查路径是否为空，防止在未加载数据时保存导致崩溃
+        if (m_nodesPath.isEmpty() || m_edgesPath.isEmpty()) {
+            qDebug() << "⚠️ 警告: 自动保存失败，路径未设置 (可能未加载地图)";
+            return;
+        }
+        
+        // 调用现有的保存函数
+        if (saveData(m_nodesPath, m_edgesPath)) {
+            qDebug() << "💾 自动保存成功";
+        } else {
+            qDebug() << "❌ 自动保存失败: 无法写入文件";
         }
     }
 

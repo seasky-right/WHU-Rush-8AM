@@ -86,9 +86,10 @@ private:
     int hoveredNodeId = -1;
     int hoveredEdgeIndex = -1;
     
-    // 活跃的气泡
+    // 【新增】气泡自适应缩放比例
+    double currentBubbleScale = 1.0;
+
     QVector<QGraphicsItem*> hoverItems;
-    // 正在淡出的气泡
     QVector<QGraphicsItem*> dyingItems; 
     
     QVector<int> hiddenLabelNodeIds;
@@ -99,7 +100,7 @@ private:
     void clearHoverItems();
     void fadeOutHoverItems();
     void killDyingItems(); 
-    void stopHoverAnimations(); // 【修复】补上这个缺失的声明
+    void stopHoverAnimations();
     
     void showNodeHoverBubble(const Node& node);
     void showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoint);

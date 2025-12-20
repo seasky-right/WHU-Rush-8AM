@@ -113,8 +113,14 @@ void GraphModel::parseNodeLine(const QString& line) {
     }
     nodesMap.insert(node.id, node);
 
-    if (node.type == NodeType::Visible && node.id >= maxBuildingId) maxBuildingId = node.id + 1;
-    if (node.type == NodeType::Ghost && node.id >= maxRoadId) maxRoadId = node.id + 1;
+    // 【重要】加载数据时，必须更新 maxBuildingId 和 maxRoadId
+    // 确保它们比文件中现有的 ID 都要大
+    if (node.type == NodeType::Visible) {
+        if (node.id >= maxBuildingId) maxBuildingId = node.id + 1;
+    } 
+    else if (node.type == NodeType::Ghost) { // 路口
+        if (node.id >= maxRoadId) maxRoadId = node.id + 1;
+    }
 }
 
 void GraphModel::parseEdgeLine(const QString& line) {
@@ -159,9 +165,17 @@ int GraphModel::addNode(double x, double y, NodeType type) {
     // 1. 获取对应的计数器指针
     int* pCounter = (type == NodeType::Visible) ? &maxBuildingId : &maxRoadId;
 
-    // 2. 安全检查：防止ID冲突 (之前的修复)
+    // 2. 【修复】安全查找空闲 ID (防止死循环)
+    int loopSafetyLimit = 100000; // 熔断阈值
+    int loopCount = 0;
+    
     while (nodesMap.contains(*pCounter)) {
         (*pCounter)++;
+        loopCount++;
+        if (loopCount > loopSafetyLimit) {
+            qDebug() << "❌ 严重错误: ID 生成器陷入死循环，强制中断。当前 ID:" << *pCounter;
+            break; 
+        }
     }
 
     // 3. 取出当前可用 ID
@@ -189,7 +203,7 @@ int GraphModel::addNode(double x, double y, NodeType type) {
     act.nodeData = n;
     undoStack.push(act);
     
-    // 【新增】立即保存
+    // 4. 执行自动保存
     autoSave();
     
     return id;
@@ -453,9 +467,12 @@ PathRecommendation GraphModel::getSpecificRoute(int startId, int endId,
                                               TransportMode mode,
                                               Weather weather, 
                                               QTime currentTime, 
-                                              QTime classTime) {
+                                              QTime classTime,
+                                              bool enableLateCheck) { // <--- 新增参数
     // 1. 基础寻路
     QVector<int> path = findPath(startId, endId, mode, weather);
+    
+    // 如果无路可走
     if (path.isEmpty()) return PathRecommendation(); 
 
     // 2. 计算基础数据
@@ -498,8 +515,11 @@ PathRecommendation GraphModel::getSpecificRoute(int startId, int endId,
         break;
     }
 
-    // 4. 迟到判定
-    bool late = isLate(totalTime, currentTime, classTime);
+    // 4. [核心修改] 迟到判定：只有当开关开启时才计算
+    bool late = false;
+    if (enableLateCheck) {
+        late = isLate(totalTime, currentTime, classTime);
+    }
 
     return PathRecommendation(rType, typeName, label, path, dist, totalTime, 0, late);
 }

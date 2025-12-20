@@ -15,7 +15,11 @@ HoverBubble::HoverBubble(QGraphicsItem* parent)
     m_descFont.setWeight(QFont::Normal);
     m_descFont.setPointSize(9);
 
-    setFlag(QGraphicsItem::ItemIgnoresTransformations, false);
+    // 【核心修改】开启此标志！
+    // 这会让气泡忽略父级(地图)的缩放变换，永远保持 1:1 的像素大小渲染
+    // 从而实现"地图缩小时气泡不缩小"的效果 (Billboarding)
+    setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    
     setAcceptHoverEvents(false);
     setScale(m_bubbleScale);
 }
@@ -78,12 +82,9 @@ void HoverBubble::recalcLayout()
         // 边气泡保持居中
         m_rect = QRectF(-w/2.0, -h/2.0, w, h);
     } else {
-        // 【核心修改】节点气泡改为显示在下方
-        // y = nodeRadius (假设约8-10) + padding
+        // 节点气泡显示在下方
         double nodeRadius = 10.0; 
         double topMargin = 8.0; 
-        
-        // 矩形区域：(-宽/2, 节点底部, 宽, 高)
         m_rect = QRectF(-w/2.0, nodeRadius + topMargin, w, h);
     }
 }
@@ -91,12 +92,10 @@ void HoverBubble::recalcLayout()
 QRectF HoverBubble::boundingRect() const
 {
     QRectF r = m_rect;
-    // 如果有线，包围盒要包含线
     if (m_hasLine) {
         r = r.united(QRectF(m_lineA_rel, QSizeF(1,1)));
         r = r.united(QRectF(m_lineB_rel, QSizeF(1,1)));
     }
-    // 留出阴影余量
     return r.adjusted(-10, -10, 10, 10);
 }
 
@@ -110,11 +109,9 @@ void HoverBubble::paint(QPainter* painter, const QStyleOptionGraphicsItem* optio
     // 1. 绘制连接线 (仅 Edge 模式)
     if (m_hasLine) {
         painter->save();
-        // 线条颜色稍微加深一点点，保证清晰
         QPen linePen(m_color.darker(110)); 
         linePen.setWidth(4);
         linePen.setCapStyle(Qt::RoundCap);
-        // 线条稍微透明一点，不抢戏
         QColor lineC = linePen.color();
         lineC.setAlpha(100);
         linePen.setColor(lineC);
@@ -124,25 +121,20 @@ void HoverBubble::paint(QPainter* painter, const QStyleOptionGraphicsItem* optio
         painter->restore();
     }
 
-    // 2. 绘制气泡本体 (Glassmorphism 风格)
+    // 2. 绘制气泡本体
     painter->save();
-    
-    // 背景：半透明
     painter->setBrush(m_color);
     
-    // 描边：极细的浅灰色，增加精致感
-    QPen borderPen(QColor(255, 255, 255, 100)); // 半透明白内描边（可选）或浅灰外描边
-    borderPen = QPen(QColor(0, 0, 0, 15)); // 极淡的黑色描边，模拟物理边缘
+    QPen borderPen(QColor(0, 0, 0, 15)); 
     borderPen.setWidthF(1.0);
     painter->setPen(borderPen);
 
-    double radius = 12.0; // iOS 圆角较大
+    double radius = 12.0; 
     painter->drawRoundedRect(m_rect, radius, radius);
 
     // 3. 绘制文字
-    // 必须用深色，保证在半透明背景上的对比度
-    QColor textColor("#1C1C1E"); // System Gray (Near Black)
-    QColor descColor("#8E8E93"); // System Gray (Secondary)
+    QColor textColor("#1C1C1E"); 
+    QColor descColor("#8E8E93"); 
 
     painter->setPen(textColor);
     painter->setFont(m_nameFont);
