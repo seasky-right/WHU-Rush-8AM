@@ -9,15 +9,19 @@
 RouteButton::RouteButton(const PathRecommendation& rec, QWidget *parent)
     : QPushButton(parent), recommendation(rec)
 {
-    // 设置按钮文本
-    setText(recommendation.getDisplayText());
+    // 显示更丰富的信息
+    QString text = recommendation.getDisplayText();
+    if (recommendation.isLate) {
+        text += "\n(⚠️ 预计迟到)";
+    }
+    setText(text);
     
     // 初始样式
     updateStyle(false);
     
     // 统一尺寸策略：宽度填满，固定高度
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    setMinimumHeight(50);
+    setMinimumHeight(60); // 增加高度以容纳可能的警告文字
 }
 
 void RouteButton::enterEvent(QEnterEvent *event)
@@ -36,35 +40,45 @@ void RouteButton::leaveEvent(QEvent *event)
 
 void RouteButton::updateStyle(bool isHovered)
 {
+    QString baseColor = "#F0F0F0";
+    QString hoverColor = "#F8C3CD"; // 樱花粉
+    QString borderColor = "#D0D0D0";
+    QString textColor = "#2C3E50";
+
+    // [新增] 迟到颜色逻辑
+    if (recommendation.isLate) {
+        baseColor = "#FFEBEE";  // 浅红背景 (System Red Light)
+        hoverColor = "#FFCDD2"; // 悬停深红
+        borderColor = "#E57373"; // 红色边框
+        textColor = "#C62828";   // 红色文字
+    }
+
     if (isHovered) {
-        // 悬停时的样式：突出显示
-        setStyleSheet(
+        // 悬停时的样式
+        QString style = QString(
             "RouteButton { "
-            "    background-color: #F8C3CD; "  // 武大樱花粉
-            "    color: #2C3E50; "              // 科技灰
+            "    background-color: %1; "  
+            "    color: %2; "              
             "    font-weight: bold; "
-            "    border: 2px solid #E91E63; "   // 粉红色边框
+            "    border: 2px solid %3; "   
             "    border-radius: 5px; "
             "    padding: 8px; "
             "} "
-            "RouteButton:pressed { "
-            "    background-color: #E91E63; "
-            "    color: white; "
-            "}"
-        );
+        ).arg(hoverColor).arg(textColor).arg(recommendation.isLate ? "#D32F2F" : "#E91E63");
+        
+        setStyleSheet(style);
     } else {
         // 正常样式
-        setStyleSheet(
+        QString style = QString(
             "RouteButton { "
-            "    background-color: #F0F0F0; "
-            "    color: #2C3E50; "
-            "    border: 1px solid #D0D0D0; "
+            "    background-color: %1; "
+            "    color: %2; "
+            "    border: 1px solid %3; "
             "    border-radius: 5px; "
             "    padding: 8px; "
             "} "
-            "RouteButton:pressed { "
-            "    background-color: #F8C3CD; "
-            "}"
-        );
+        ).arg(baseColor).arg(textColor).arg(borderColor);
+        
+        setStyleSheet(style);
     }
 }

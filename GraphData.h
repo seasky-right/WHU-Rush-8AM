@@ -22,6 +22,42 @@ enum class EdgeType {
     Normal = 0, Main = 1, Path = 2, Indoor = 3, Stairs = 4
 };
 
+// 4. [新增] 天气类型
+enum class Weather {
+    Sunny,  // 晴天
+    Rainy,  // 雨天
+    Snowy   // 大雪
+};
+
+// 5. [新增] 交通方式 (扩展)
+enum class TransportMode {
+    Walk,
+    SharedBike, // 共享单车
+    EBike,      // 电动车
+    Run,        // 跑步
+    Bus         // 校车
+};
+
+// 6. [新增] 权重模式
+enum class WeightMode { DISTANCE, TIME, COST };
+
+// 7. [新增] 全局配置常量 (基于 PRD)
+namespace Config {
+    // 速度 (m/s)
+    const double SPEED_WALK = 1.2;          // 步行 4.3 km/h
+    const double SPEED_RUN = 3.0;           // 跑步 (估算)
+    const double SPEED_SHARED_BIKE = 3.89;  // 单车 14.0 km/h
+    const double SPEED_EBIKE = 5.56;        // 电驴 20.0 km/h
+    const double SPEED_BUS = 10.0;          // 校车 36.0 km/h
+    
+    // 交互时间 (秒) - 共享单车无桩模式
+    const double TIME_FIND_BIKE = 120.0;    // 找车耗时 (2分钟)
+    const double TIME_PARK_BIKE = 60.0;     // 还车耗时 (1分钟)
+    
+    // 阈值
+    const double SLOPE_THRESHOLD = 0.05;    // 坡度阈值 5%
+}
+
 struct Node {
     int id;
     QString name;
@@ -47,7 +83,7 @@ struct Node {
         if (s == "Building") return NodeCategory::Building;
         if (s == "Classroom") return NodeCategory::Classroom;
         if (s == "Hotel") return NodeCategory::Hotel;
-        if (s == "BusStation") return NodeCategory::BusStation; // <--- 新增
+        if (s == "BusStation") return NodeCategory::BusStation;
         return NodeCategory::None;
     }
     
@@ -78,7 +114,6 @@ struct Edge {
     int u, v;
     double distance;
     EdgeType type;
-    // bool isSlope; <--- 【冗余代码】
     double slope;
     QString name;
     QString description;

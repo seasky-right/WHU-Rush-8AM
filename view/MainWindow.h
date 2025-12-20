@@ -6,7 +6,10 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QVBoxLayout>
+#include <QtWidgets/QHBoxLayout> // [新增]
 #include <QtWidgets/QCheckBox>
+#include <QtWidgets/QComboBox>
+#include <QtWidgets/QTimeEdit>
 #include <QtCore/QVector>
 #include "../model/GraphModel.h"
 #include "MapWidget.h"
@@ -22,28 +25,37 @@ public:
 
 private slots:
     void onMapNodeClicked(int nodeId, QString name, bool isLeftClick);
-    void onStartSearch();
+    
+    // [修改] 统一的模式搜索槽函数
+    void onModeSearch(TransportMode mode);
+    
     void onRouteButtonClicked(int routeIndex);
     void onRouteHovered(const PathRecommendation& recommendation);
     void onRouteUnhovered();
-    
-    // 打开编辑器
     void onOpenEditor();
-    // 编辑器保存后刷新
     void onMapDataChanged();
 
 private:
     GraphModel* model;
     MapWidget* mapWidget;
 
-    // 导航控件
     QLineEdit* startEdit;
     QLineEdit* endEdit;
-    QPushButton* searchBtn;
-    QLabel* statusLabel;
-    QPushButton* openEditorBtn; // 新增入口
+    
+    QComboBox* weatherCombo;
+    QTimeEdit* timeCurrentEdit;
+    QTimeEdit* timeClassEdit;
 
-    // 路线推荐 UI
+    // [修改] 分开的交通工具按钮
+    QPushButton* btnWalk;
+    QPushButton* btnBike;
+    QPushButton* btnEBike;
+    QPushButton* btnRun;
+    QPushButton* btnBus;
+
+    QLabel* statusLabel;
+    QPushButton* openEditorBtn;
+
     QWidget* routePanelWidget;
     QScrollArea* routeScrollArea;
     QVBoxLayout* routePanelLayout;

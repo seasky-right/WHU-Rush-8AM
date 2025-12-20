@@ -1,12 +1,11 @@
 #include "MainWindow.h"
-#include "EditorWindow.h" // 引入编辑器窗口
+#include "EditorWindow.h" 
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QGroupBox>
 #include <QtWidgets/QMessageBox>
 #include <QtCore/QDebug>
 #include <QtCore/QCoreApplication>
-#include <QtCore/QFileInfo>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -16,14 +15,11 @@ MainWindow::MainWindow(QWidget *parent)
 
     model = new GraphModel();
     mapWidget = new MapWidget(this);
-    // 确保主界面处于 View 模式
     mapWidget->setEditMode(EditMode::None);
 
     setupUi();
 
-    // 导航信号连接 (注意这里连接的是 nodeClicked)
     connect(mapWidget, &MapWidget::nodeClicked, this, &MainWindow::onMapNodeClicked);
-    connect(searchBtn, &QPushButton::clicked, this, &MainWindow::onStartSearch);
     connect(openEditorBtn, &QPushButton::clicked, this, &MainWindow::onOpenEditor);
 
     // 加载数据
@@ -37,9 +33,7 @@ MainWindow::MainWindow(QWidget *parent)
     }
 }
 
-MainWindow::~MainWindow() {
-    delete model;
-}
+MainWindow::~MainWindow() { delete model; }
 
 void MainWindow::setupUi()
 {
@@ -53,6 +47,7 @@ void MainWindow::setupUi()
     controlPanel->setFixedWidth(320);
     QVBoxLayout* panelLayout = new QVBoxLayout(controlPanel);
 
+    // 1. 地点
     panelLayout->addWidget(new QLabel("起点 (左键点击):"));
     startEdit = new QLineEdit(); startEdit->setReadOnly(true);
     panelLayout->addWidget(startEdit);
@@ -60,16 +55,71 @@ void MainWindow::setupUi()
     panelLayout->addWidget(new QLabel("终点 (右键点击):"));
     endEdit = new QLineEdit(); endEdit->setReadOnly(true);
     panelLayout->addWidget(endEdit);
+    panelLayout->addSpacing(15);
+    
+    // 2. 环境
+    QGroupBox* envBox = new QGroupBox("环境设定");
+    QVBoxLayout* envLayout = new QVBoxLayout(envBox);
 
-    panelLayout->addSpacing(10);
-    searchBtn = new QPushButton("🚀 开始推荐");
-    searchBtn->setStyleSheet("background-color: #2ECC71; color: white; font-weight: bold; padding: 10px; border-radius: 5px;");
-    panelLayout->addWidget(searchBtn);
+    envLayout->addWidget(new QLabel("今日天气:"));
+    weatherCombo = new QComboBox();
+    weatherCombo->addItems({"☀️ 晴朗 (Sunny)", "🌧️ 下雨 (Rainy)", "❄️ 大雪 (Snowy)"});
+    envLayout->addWidget(weatherCombo);
+
+    envLayout->addWidget(new QLabel("当前时间:"));
+    timeCurrentEdit = new QTimeEdit(QTime::currentTime());
+    timeCurrentEdit->setDisplayFormat("HH:mm");
+    envLayout->addWidget(timeCurrentEdit);
+
+    envLayout->addWidget(new QLabel("上课时间:"));
+    timeClassEdit = new QTimeEdit(QTime(8, 0)); 
+    timeClassEdit->setDisplayFormat("HH:mm");
+    envLayout->addWidget(timeClassEdit);
+    panelLayout->addWidget(envBox);
+    panelLayout->addSpacing(15);
+
+    // 3. [修改] 交通工具按钮组
+    QLabel* modeLabel = new QLabel("选择出行方式:");
+    modeLabel->setStyleSheet("font-weight: bold; margin-bottom: 5px;");
+    panelLayout->addWidget(modeLabel);
+
+    // 使用 Grid 布局或 HBox 布局来排列按钮
+    QGridLayout* btnLayout = new QGridLayout();
+    
+    btnWalk = new QPushButton("🚶 步行");
+    btnBike = new QPushButton("🚲 单车");
+    btnEBike = new QPushButton("🛵 电驴");
+    btnRun = new QPushButton("🏃 跑步");
+    btnBus = new QPushButton("🚌 校车");
+
+    // 简单的样式设置
+    QString btnStyle = "QPushButton { padding: 8px; font-weight: bold; border-radius: 4px; background-color: #F0F2F5; border: 1px solid #DCDFE6; } QPushButton:hover { background-color: #E6E8EB; }";
+    btnWalk->setStyleSheet(btnStyle);
+    btnBike->setStyleSheet(btnStyle);
+    btnEBike->setStyleSheet(btnStyle);
+    btnRun->setStyleSheet(btnStyle);
+    btnBus->setStyleSheet(btnStyle);
+
+    // 排列：第一行3个，第二行2个
+    btnLayout->addWidget(btnWalk, 0, 0);
+    btnLayout->addWidget(btnBike, 0, 1);
+    btnLayout->addWidget(btnEBike, 0, 2);
+    btnLayout->addWidget(btnRun, 1, 0);
+    btnLayout->addWidget(btnBus, 1, 1);
+
+    panelLayout->addLayout(btnLayout);
+
+    // 信号连接
+    connect(btnWalk, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::Walk); });
+    connect(btnBike, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::SharedBike); });
+    connect(btnEBike, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::EBike); });
+    connect(btnRun, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::Run); });
+    connect(btnBus, &QPushButton::clicked, this, [this](){ onModeSearch(TransportMode::Bus); });
 
     panelLayout->addSpacing(20);
     
-    // 路线展示区
-    QLabel* routeLabel = new QLabel("推荐方案:");
+    // 4. 结果列表
+    QLabel* routeLabel = new QLabel("规划结果:");
     routeLabel->setStyleSheet("font-weight: bold;");
     panelLayout->addWidget(routeLabel);
     
@@ -81,12 +131,12 @@ void MainWindow::setupUi()
     routeScrollArea->setWidget(routePanelWidget);
     panelLayout->addWidget(routeScrollArea, 1);
 
-    // 底部工具
+    // 5. 底部
     panelLayout->addSpacing(10);
-    openEditorBtn = new QPushButton("🛠️ 打开地图编辑器");
+    openEditorBtn = new QPushButton("🛠️ 打开编辑器");
     panelLayout->addWidget(openEditorBtn);
 
-    statusLabel = new QLabel("欢迎使用");
+    statusLabel = new QLabel("就绪");
     statusLabel->setStyleSheet("color: gray;");
     panelLayout->addWidget(statusLabel);
 
@@ -94,97 +144,99 @@ void MainWindow::setupUi()
     mainLayout->addWidget(mapWidget, 1);
 }
 
-void MainWindow::onMapNodeClicked(int nodeId, QString name, bool isLeftClick)
-{
+void MainWindow::onMapNodeClicked(int nodeId, QString name, bool isLeftClick) {
     if (isLeftClick) {
-        startEdit->setText(name);
-        currentStartId = nodeId;
-        statusLabel->setText("起点: " + name);
+        startEdit->setText(name); currentStartId = nodeId; statusLabel->setText("起点: " + name);
     } else {
-        endEdit->setText(name);
-        currentEndId = nodeId;
-        statusLabel->setText("终点: " + name);
+        endEdit->setText(name); currentEndId = nodeId; statusLabel->setText("终点: " + name);
     }
 }
 
-void MainWindow::onStartSearch()
-{
+// [新增] 核心搜索逻辑
+void MainWindow::onModeSearch(TransportMode mode) {
     if (currentStartId == -1 || currentEndId == -1) {
-        QMessageBox::warning(this, "提示", "请先选择起点和终点！");
+        QMessageBox::warning(this, "提示", "请先在地图上选择起点(左键)和终点(右键)！");
         return;
     }
 
-    statusLabel->setText("计算中...");
-    QVector<PathRecommendation> recommendations = model->recommendPaths(currentStartId, currentEndId);
+    Weather w = Weather::Sunny;
+    int idx = weatherCombo->currentIndex();
+    if (idx == 1) w = Weather::Rainy;
+    if (idx == 2) w = Weather::Snowy;
 
-    if (recommendations.isEmpty()) {
-        statusLabel->setText("无可行路线");
-        QMessageBox::warning(this, "提示", "无法找到路径！");
-        return;
+    QTime curTime = timeCurrentEdit->time();
+    QTime clsTime = timeClassEdit->time();
+
+    statusLabel->setText("规划中...");
+    
+    // 获取单条推荐
+    PathRecommendation rec = model->getSpecificRoute(
+        currentStartId, currentEndId, mode, w, curTime, clsTime
+    );
+
+    QVector<PathRecommendation> results;
+    // 只有路径非空才展示
+    if (!rec.pathNodeIds.isEmpty()) {
+        results.append(rec);
+        statusLabel->setText("规划成功");
+    } else {
+        statusLabel->setText("该方式无可行路线 (可能受天气或地形限制)");
+        QMessageBox::information(this, "提示", "该交通方式下无可行路线。\n原因可能是：\n1. 雪天禁行\n2. 楼梯阻断了车辆\n3. 孤立节点");
     }
-
-    displayRouteRecommendations(recommendations);
-    statusLabel->setText(QString("找到 %1 条路线").arg(recommendations.size()));
+    
+    // 复用之前的展示逻辑
+    displayRouteRecommendations(results);
 }
 
-void MainWindow::displayRouteRecommendations(const QVector<PathRecommendation>& recommendations)
-{
+void MainWindow::displayRouteRecommendations(const QVector<PathRecommendation>& recommendations) {
     clearRoutePanel();
     currentRecommendations = recommendations;
-    
     for (int i = 0; i < recommendations.size(); ++i) {
         RouteButton* btn = new RouteButton(recommendations[i]);
         routePanelLayout->addWidget(btn);
-        
         connect(btn, &QPushButton::clicked, this, [this, i]() { onRouteButtonClicked(i); });
         connect(btn, &RouteButton::routeHovered, this, &MainWindow::onRouteHovered);
         connect(btn, &RouteButton::routeUnhovered, this, &MainWindow::onRouteUnhovered);
     }
+    // 如果有结果，默认高亮第一条
+    if (!recommendations.isEmpty()) {
+        mapWidget->highlightPath(recommendations[0].pathNodeIds, 1.0);
+    } else {
+        mapWidget->clearPathHighlight();
+    }
 }
 
-void MainWindow::clearRoutePanel()
-{
+void MainWindow::clearRoutePanel() {
     QLayoutItem* item;
     while ((item = routePanelLayout->takeAt(0)) != nullptr) {
-        delete item->widget();
-        delete item;
+        delete item->widget(); delete item;
     }
     routeButtons.clear();
 }
 
-void MainWindow::onRouteButtonClicked(int routeIndex)
-{
+void MainWindow::onRouteButtonClicked(int routeIndex) {
     if (routeIndex >= 0 && routeIndex < currentRecommendations.size()) {
         const auto& rec = currentRecommendations[routeIndex];
         mapWidget->highlightPath(rec.pathNodeIds, 1.0);
         statusLabel->setText("已选择: " + rec.typeName);
     }
 }
-
-void MainWindow::onRouteHovered(const PathRecommendation& recommendation)
-{
+void MainWindow::onRouteHovered(const PathRecommendation& recommendation) {
     mapWidget->highlightPath(recommendation.pathNodeIds, 0.8);
 }
-
-void MainWindow::onRouteUnhovered()
-{
-    mapWidget->clearPathHighlight();
+void MainWindow::onRouteUnhovered() { 
+    // 不再清除，保留点击选中的状态，或者根据需求清除
+    // mapWidget->clearPathHighlight(); 
 }
 
-void MainWindow::onOpenEditor()
-{
-    // 创建并显示编辑器，传入共享的 Model
+void MainWindow::onOpenEditor() {
     EditorWindow* editor = new EditorWindow(this->model, this);
-    // 当编辑器保存数据时，刷新主地图
     connect(editor, &EditorWindow::dataChanged, this, &MainWindow::onMapDataChanged);
-    // 设置为独立窗口显示
-    editor->setWindowModality(Qt::WindowModal); // 或者 Qt::NonModal
+    editor->setWindowModality(Qt::WindowModal); 
     editor->show();
 }
 
-void MainWindow::onMapDataChanged()
-{
-    // 重新从 Model 绘制地图
+void MainWindow::onMapDataChanged() {
     mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
     statusLabel->setText("地图数据已更新");
 }

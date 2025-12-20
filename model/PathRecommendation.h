@@ -4,9 +4,9 @@
 #include <QString>
 
 enum class RouteType {
-    FASTEST,      // 极限冲刺 - Weight = Duration
-    EASIEST,      // 懒人养生 - Weight = Cost (anti-slope)
-    SHORTEST      // 经济适用 - Weight = Distance
+    FASTEST,      // 极限冲刺
+    EASIEST,      // 懒人养生
+    SHORTEST      // 经济适用
 };
 
 struct PathRecommendation {
@@ -17,18 +17,18 @@ struct PathRecommendation {
     double distance;            // 总距离（米）
     double duration;            // 总耗时（秒）
     double cost;                // 心理代价权重值
+    bool isLate;                // [新增] 是否会迟到
 
     PathRecommendation()
-        : type(RouteType::FASTEST), distance(0), duration(0), cost(0) {}
+        : type(RouteType::FASTEST), distance(0), duration(0), cost(0), isLate(false) {}
 
+    // [修改] 构造函数包含了 isLate
     PathRecommendation(RouteType t, QString name, QString label, 
-                      const QVector<int>& path, double dist, double dur, double c)
+                      const QVector<int>& path, double dist, double dur, double c, bool late = false)
         : type(t), typeName(name), routeLabel(label), 
-          pathNodeIds(path), distance(dist), duration(dur), cost(c) {}
+          pathNodeIds(path), distance(dist), duration(dur), cost(c), isLate(late) {}
 
     QString getDisplayText() const {
-        // 返回按钮显示的文本
-        // 例："路线1 | 极限冲刺 | 距离: 800m"
         return QString("%1 | %2 | 距离: %3m | 耗时: %4s")
             .arg(routeLabel)
             .arg(typeName)
@@ -36,5 +36,3 @@ struct PathRecommendation {
             .arg(static_cast<int>(duration));
     }
 };
-
- 
