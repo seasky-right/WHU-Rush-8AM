@@ -2,7 +2,7 @@
 #include <QtWidgets/QGraphicsEllipseItem>
 #include <QtWidgets/QGraphicsLineItem>
 #include <QtWidgets/QGraphicsTextItem>
-#include <QtWidgets/QGraphicsObject>  // 必须包含
+#include <QtWidgets/QGraphicsObject> // 必须包含
 #include "HoverBubble.h"
 #include <QtGui/QMouseEvent>
 #include <QtCore/QDebug>
@@ -18,15 +18,14 @@
 #include <limits>
 
 // =============================================================
-//  【内部辅助类】将光环升级为 QGraphicsObject 以支持安全动画
+//  内部辅助类：必须继承自 QGraphicsObject 才能支持 QPropertyAnimation
 // =============================================================
 
-// 1. 圆形光环 (用于节点)
 class HaloItem : public QGraphicsObject {
 public:
     HaloItem(const QPointF& center, double radius, QGraphicsItem* parent = nullptr)
         : QGraphicsObject(parent), m_center(center), m_radius(radius) {
-        setAcceptedMouseButtons(Qt::NoButton); // 穿透点击
+        setAcceptedMouseButtons(Qt::NoButton);
         setZValue(99); 
     }
     QRectF boundingRect() const override {
@@ -46,7 +45,6 @@ private:
     double m_radius;
 };
 
-// 2. 线性光带 (用于道路)
 class GlowItem : public QGraphicsObject {
 public:
     GlowItem(const QPointF& p1, const QPointF& p2, double width, QGraphicsItem* parent = nullptr)
@@ -86,8 +84,7 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     this->setRenderHint(QPainter::SmoothPixmapTransform);
     this->setRenderHint(QPainter::TextAntialiasing);
     
-    // 背景色：System Grouped Background (#F2F2F7) - 柔和护眼
-    this->setBackgroundBrush(QBrush(QColor("#F2F2F7")));
+    this->setBackgroundBrush(QBrush(QColor("#F5F5F7")));
     
     this->setMouseTracking(true);
     this->setDragMode(QGraphicsView::NoDrag);
@@ -106,7 +103,6 @@ void MapWidget::setActiveEdge(int u, int v) {
     drawMap(cachedNodes, cachedEdges);
 }
 
-// 安全停止动画
 void MapWidget::stopHoverAnimations() {
     for (auto& a : hoverAnims) { 
         if (a) { 
@@ -119,11 +115,11 @@ void MapWidget::stopHoverAnimations() {
 
 void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 {
-    // --- 1. 停止一切动画 (防闪退第一道防线) ---
+    // 1. 停止动画 (必须在删除 Item 之前)
     if (animationTimer->isActive()) animationTimer->stop();
     stopHoverAnimations();
 
-    // --- 2. 清理指针引用 ---
+    // 2. 清理指针
     activeTrackItem = nullptr;
     activeGrowthItem = nullptr;
     currentPathNodeIds.clear();
@@ -134,7 +130,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
     nodeLabelItems.clear();
     hiddenLabelNodeIds.clear();
     
-    // --- 3. 物理清理场景 ---
+    // 3. 物理清理场景
     auto items = scene->items();
     for (auto it : items) {
         if (it != backgroundItem && it->zValue() > -100) {
@@ -143,7 +139,6 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         }
     }
 
-    // --- 4. 重建地图 ---
     cachedNodes = nodes;
     cachedEdges = edges;
 
@@ -176,7 +171,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         }
     }
 
-    // 绘制连线预览
+    // 连线预览
     if (currentMode == EditMode::ConnectEdge && connectFirstNodeId != -1 && hoveredNodeId != -1 && connectFirstNodeId != hoveredNodeId) {
         if (nodeMap.contains(connectFirstNodeId) && nodeMap.contains(hoveredNodeId)) {
             Node start = nodeMap[connectFirstNodeId];
@@ -270,7 +265,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 }
 
 // ---------------------------------------------------------
-//   悬停气泡与动画 (修复版：全 QObject 动画)
+//   悬停气泡与动画 (修复版)
 // ---------------------------------------------------------
 
 void MapWidget::clearHoverItems() {
@@ -303,18 +298,18 @@ void MapWidget::fadeOutHoverItems() {
     auto* group = new QParallelAnimationGroup(this);
     for (auto* it : dyingItems) {
         if (!it) continue;
-        
-        // 尝试转换为 QGraphicsObject (HaloItem, GlowItem, HoverBubble 都是)
+
+        // 【修复编译错误】: 只有当 item 是 QGraphicsObject 时才能使用 QPropertyAnimation
+        // HaloItem, GlowItem, HoverBubble 都是 QGraphicsObject
         QGraphicsObject* obj = dynamic_cast<QGraphicsObject*>(it);
         if (obj) {
-            // 安全：使用 QPropertyAnimation，如果 obj 被删，动画自动停止
             auto* a_op = new QPropertyAnimation(obj, "opacity", this);
             a_op->setDuration(200);
             a_op->setStartValue(obj->opacity());
             a_op->setEndValue(0.0);
             group->addAnimation(a_op);
 
-            // 如果是气泡，额外缩放
+            // 仅气泡缩放
             HoverBubble* hb = qobject_cast<HoverBubble*>(obj);
             if (hb) {
                 auto* a_sc = new QPropertyAnimation(hb, "bubbleScale", this);
@@ -323,6 +318,10 @@ void MapWidget::fadeOutHoverItems() {
                 a_sc->setEndValue(0.95); 
                 group->addAnimation(a_sc);
             }
+        } else {
+            // 如果不是 QObject (理论上不应发生)，直接移除
+            scene->removeItem(it);
+            delete it;
         }
     }
     
@@ -335,6 +334,8 @@ void MapWidget::fadeOutHoverItems() {
     group->start();
 }
 
+QColor MapWidget::withAlpha(const QColor& c, int alpha) { QColor t=c; t.setAlpha(alpha); return t; }
+
 void MapWidget::startHoverAppearAnimation() {
     auto* group = new QParallelAnimationGroup(this);
 
@@ -342,6 +343,7 @@ void MapWidget::startHoverAppearAnimation() {
         if (!it) continue;
         it->setOpacity(0.0);
 
+        // 【修复编译错误】: 强制转换为 QGraphicsObject*
         QGraphicsObject* obj = dynamic_cast<QGraphicsObject*>(it);
         if (obj) {
             auto* a_op = new QPropertyAnimation(obj, "opacity", this);
@@ -373,12 +375,11 @@ void MapWidget::showNodeHoverBubble(const Node& node) {
     killDyingItems();
     clearHoverItems(); 
     
-    // 1. 光环 (使用 HaloItem 类，它是 QObject)
+    // HaloItem 是 QGraphicsObject
     auto* halo = new HaloItem(QPointF(node.x, node.y), 25.0);
     scene->addItem(halo);
     hoverItems.push_back(halo);
 
-    // 2. 气泡
     const QColor bubbleColor(255, 255, 255, 215); 
     HoverBubble* hb = new HoverBubble();
     hb->setIsEdge(false);
@@ -402,16 +403,15 @@ void MapWidget::showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoin
     killDyingItems();
     clearHoverItems();
 
-    // 1. 道路柔光 (使用 GlowItem 类)
     QMap<int, Node> nodeMap; for (const auto& n : cachedNodes) nodeMap.insert(n.id, n);
     if (!nodeMap.contains(edge.u) || !nodeMap.contains(edge.v)) return;
     Node u = nodeMap[edge.u]; Node v = nodeMap[edge.v];
     
+    // GlowItem 是 QGraphicsObject
     auto* glow = new GlowItem(QPointF(u.x, u.y), QPointF(v.x, v.y), 12.0);
     scene->addItem(glow);
     hoverItems.push_back(glow);
 
-    // 2. 气泡
     const QColor baseEdgeColor = edgePenForType(edge.type).color();
     QColor bubbleColor = baseEdgeColor.lighter(170); 
     bubbleColor.setAlpha(225); 
@@ -430,7 +430,7 @@ void MapWidget::showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoin
 }
 
 // ---------------------------------------------------------
-//   常规函数 (保持不变)
+//   常规函数
 // ---------------------------------------------------------
 
 void MapWidget::setEditMode(EditMode mode)
