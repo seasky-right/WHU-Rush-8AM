@@ -72,10 +72,20 @@ MainWindow::MainWindow(QWidget *parent)
     connect(openEditorBtn, &QPushButton::clicked, this, &MainWindow::onOpenEditor);
 
     QString appDir = QCoreApplication::applicationDirPath();
-    if (model->loadData(appDir + "/Data/nodes.txt", appDir + "/Data/edges.txt")) {
+    
+    // 【修改】同时加载地图和时刻表
+    bool mapLoaded = model->loadData(appDir + "/Data/nodes.txt", appDir + "/Data/edges.txt");
+    bool scheduleLoaded = model->loadSchedule(appDir + "/Data/bus_schedule.csv");
+
+    if (mapLoaded) {
         mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
         mapWidget->setBackgroundImage(appDir + "/Data/map.png");
-        statusLabel->setText("地图加载成功");
+        
+        if (scheduleLoaded) {
+            statusLabel->setText("地图与时刻表加载成功");
+        } else {
+            statusLabel->setText("注意：校车时刻表加载失败");
+        }
     } else {
         statusLabel->setText("数据加载失败");
     }
@@ -130,7 +140,7 @@ QWidget* createTimeSpinner(QSpinBox*& spinHour, QSpinBox*& spinMin, QTime defaul
         );
     };
 
-    // 【修改 2】使用 PadSpinBox 替代 QSpinBox 以支持自动补零
+    // 使用 PadSpinBox 替代 QSpinBox 以支持自动补零
     spinHour = new PadSpinBox();
     setupSpin(spinHour, 23);
     spinHour->setValue(defaultTime.hour());
@@ -234,7 +244,6 @@ void MainWindow::setupUi()
 
     envGrid->addWidget(createLabel("今日天气"), 0, 0);
     weatherCombo = new QComboBox();
-    // 【修改 1】去掉了英文，只保留 emoji 和中文
     weatherCombo->addItems({"☀️ 晴朗", "🌧️ 下雨", "❄️ 大雪"});
     weatherCombo->setCursor(Qt::PointingHandCursor);
     setupInput(weatherCombo, "");
@@ -414,6 +423,8 @@ void MainWindow::onModeSearch(TransportMode mode) {
     int idx = weatherCombo->currentIndex();
     if (idx == 1) w = Weather::Rainy;
     if (idx == 2) w = Weather::Snowy;
+
+    mapWidget->setWeather(w); // 触发下雨！
 
     QTime curTime(spinCurrHour->value(), spinCurrMin->value());
     QTime clsTime(spinClassHour->value(), spinClassMin->value());

@@ -18,7 +18,10 @@
 #include <limits>
 #include <algorithm>
 
-// ... 辅助类 HaloItem 和 GlowItem (保持不变，此处保留以供全选) ...
+// =========================================================
+//  辅助图形项 (HaloItem, GlowItem)
+// =========================================================
+
 class HaloItem : public QGraphicsObject {
 public:
     HaloItem(const QPointF& center, double radius, QGraphicsItem* parent = nullptr)
@@ -87,15 +90,12 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     this->setMouseTracking(true);
     this->setDragMode(QGraphicsView::NoDrag);
     
-    // 【核心修复】强制设置 MapWidget 自身的滚动条样式
-    // 之前可能因为 QGraphicsView 的特殊性没生效，这次直接对子控件设置
     QString scrollStyle = 
         "QScrollBar:vertical { background: transparent; width: 8px; margin: 0px; }"
         "QScrollBar::handle:vertical { background: #C1C1C5; min-height: 20px; border-radius: 4px; }"
         "QScrollBar::handle:vertical:hover { background: #8E8E93; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
         "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
-        
         "QScrollBar:horizontal { background: transparent; height: 8px; margin: 0px; }"
         "QScrollBar::handle:horizontal { background: #C1C1C5; min-width: 20px; border-radius: 4px; }"
         "QScrollBar::handle:horizontal:hover { background: #8E8E93; }"
@@ -111,8 +111,22 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     hoverResumeTimer = new QTimer(this);
     hoverResumeTimer->setSingleShot(true);
     connect(hoverResumeTimer, &QTimer::timeout, this, &MapWidget::resumeHoverAnimations);
+
+    // 天气跟随视口移动
+    auto updateWeatherPos = [this]() {
+        if (weatherOverlay) {
+            QPointF sceneTopLeft = mapToScene(0, 0);
+            weatherOverlay->setPos(sceneTopLeft);
+            if (viewport()) {
+                weatherOverlay->setOverlayRect(QRectF(0, 0, viewport()->width(), viewport()->height()));
+            }
+        }
+    };
+    connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, updateWeatherPos);
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, updateWeatherPos);
 }
 
+// 【补回了丢失的函数】
 void MapWidget::setActiveEdge(int u, int v) {
     activeEdgeU = u;
     activeEdgeV = v;
@@ -120,45 +134,73 @@ void MapWidget::setActiveEdge(int u, int v) {
 }
 
 void MapWidget::stopHoverAnimations() {
-    for (auto& a : hoverAnims) { 
-        if (a) { 
-            a->stop(); 
-            delete a; 
-        } 
-    }
+    for (auto& a : hoverAnims) { if (a) { a->stop(); delete a; } }
     hoverAnims.clear();
 }
 
 void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 {
+    // 1. 安全清理：停止所有运行中的动画，并彻底清空场景
     if (animationTimer->isActive()) animationTimer->stop();
     stopHoverAnimations();
-
+    
+    // 核心修复：scene->clear() 会自动删除场景中所有的 QGraphicsItem，
+    // 它是解决“操作两次就崩溃”问题的最稳妥方法。
+    scene->clear(); 
+    
+    // 2. 指针重置：由于 clear() 删除了所有对象，必须将相关指针置空，防止后续逻辑误用
     activeTrackItem = nullptr;
     activeGrowthItem = nullptr;
-    currentPathNodeIds.clear();
+    backgroundItem = nullptr; 
+    weatherOverlay = nullptr; // 天气层也被删除了，需要重新创建
 
+    // 重置相关容器
     hoverItems.clear();
     dyingItems.clear();
     editTempItems.clear();    
     nodeLabelItems.clear();
     hiddenLabelNodeIds.clear();
-    
-    auto items = scene->items();
-    for (auto it : items) {
-        if (it != backgroundItem && it->zValue() > -100) {
-            scene->removeItem(it);
-            delete it; 
+
+    // 3. 绘制背景图
+    if (!m_bgPath.isEmpty()) {
+        QPixmap px(m_bgPath);
+        if (!px.isNull()) {
+            scene->setSceneRect(0, 0, px.width(), px.height());
+            backgroundItem = scene->addPixmap(px);
+            backgroundItem->setZValue(-100); // 确保在最底层
+            backgroundItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
         }
     }
 
+    // 4. 【核心新增】初始化天气系统与环境滤镜
+    // 我们在背景之上、节点之下创建天气覆盖层
+    weatherOverlay = new WeatherOverlay();
+    // 开启忽略变换标志，使天气层（及滤镜）始终铺满屏幕像素，不随地图缩放
+    weatherOverlay->setFlag(QGraphicsItem::ItemIgnoresTransformations);
+    scene->addItem(weatherOverlay);
+    
+    // 立即对齐当前视口：计算当前镜头在场景中的位置并瞬移过去
+    QPointF sceneTopLeft = mapToScene(0, 0);
+    weatherOverlay->setPos(sceneTopLeft);
+    
+    // 设置初始矩形范围（覆盖全屏）
+    if (viewport()) {
+        weatherOverlay->setOverlayRect(QRectF(0, 0, viewport()->width(), viewport()->height()));
+    } else {
+        weatherOverlay->setOverlayRect(scene->sceneRect());
+    }
+    
+    // 恢复当前选择的天气状态（内部会触发晴天提亮/雨雪压暗逻辑）
+    setWeather(m_currentWeatherState);
+
+    // 5. 数据准备
     cachedNodes = nodes;
     cachedEdges = edges;
-
     QMap<int, Node> nodeMap;
     for(const auto& node : nodes) nodeMap.insert(node.id, node);
 
-    QPen activeEdgePen(QColor("#007AFF"));
+    // 6. 绘制所有边 (Edges)
+    QPen activeEdgePen(QColor("#007AFF")); // iOS 风格的主题蓝
     activeEdgePen.setWidth(4);
     activeEdgePen.setCapStyle(Qt::RoundCap);
 
@@ -168,6 +210,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             Node end = nodeMap[edge.v];
             
             bool isActiveEdge = false;
+            // 如果编辑器选中了这条边，则加粗高亮
             if (activeEdgeU != -1 && activeEdgeV != -1) {
                 if ((edge.u == activeEdgeU && edge.v == activeEdgeV) || 
                     (edge.u == activeEdgeV && edge.v == activeEdgeU)) {
@@ -178,16 +221,18 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             QPen drawPen = isActiveEdge ? activeEdgePen : edgePenForType(edge.type);
             auto line = scene->addLine(start.x, start.y, end.x, end.y, drawPen);
             
+            // 设置层级：主干道 > 普通道路 > 背景
             int z = 0;
             if (edge.type == EdgeType::Main) z = 1;
             if (edge.type == EdgeType::Stairs) z = 2; 
             if (isActiveEdge) z = 5; 
-            
             line->setZValue(z);
         }
     }
 
-    if (currentMode == EditMode::ConnectEdge && connectFirstNodeId != -1 && hoveredNodeId != -1 && connectFirstNodeId != hoveredNodeId) {
+    // 7. 绘制编辑器预览虚线（连线模式下）
+    if (currentMode == EditMode::ConnectEdge && connectFirstNodeId != -1 && 
+        hoveredNodeId != -1 && connectFirstNodeId != hoveredNodeId) {
         if (nodeMap.contains(connectFirstNodeId) && nodeMap.contains(hoveredNodeId)) {
             Node start = nodeMap[connectFirstNodeId];
             Node end = nodeMap[hoveredNodeId];
@@ -199,6 +244,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         }
     }
 
+    // 8. 绘制所有节点 (Nodes)
     QColor colorNormal("#636366"); 
     QColor colorActive("#007AFF");     
     QColor colorGhost("#AEAEB2");  
@@ -209,8 +255,10 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
 
     for(const auto& node : nodes) {
         bool isGhost = (node.type == NodeType::Ghost);
+        // 如果是路口节点且不在编辑模式，则不渲染
         if (isGhost && currentMode == EditMode::None) continue;
         
+        // 判断节点状态：是否为起点、终点、拖拽中或选中的端点
         bool isStart = (currentMode == EditMode::ConnectEdge && node.id == connectFirstNodeId);
         bool isTarget = (currentMode == EditMode::ConnectEdge && connectFirstNodeId != -1 && node.id == hoveredNodeId);
         bool isActiveEndpoint = (activeEdgeU != -1 && (node.id == activeEdgeU || node.id == activeEdgeV));
@@ -224,6 +272,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         double strokeWidth = 3.0;
 
         if (isHighlight) {
+            // 绘制雷达光环 (Halo Effect)
             double haloR = r + 8.0; 
             QColor haloColor = colorActive; 
             haloColor.setAlpha(80); 
@@ -237,6 +286,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             zValue = 100;           
         } 
 
+        // 画圆形本体
         QPen p(strokeColor); 
         p.setWidthF(strokeWidth);
         QBrush b(fillColor);
@@ -244,6 +294,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         item->setZValue(zValue); 
         item->setData(0, node.id);
         
+        // 为建筑节点添加投影，增强 iOS 质感
         if (!isGhost || isHighlight) {
             auto* effect = new QGraphicsDropShadowEffect();
             effect->setBlurRadius(isHighlight ? 15 : 8);
@@ -252,6 +303,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             item->setGraphicsEffect(effect);
         }
 
+        // 绘制建筑名称
         if (!isGhost && !node.name.isEmpty()) {
             auto text = scene->addText(node.name);
             text->setFont(nameFont);
@@ -264,18 +316,28 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             if (isHighlight) {
                 QFont f = text->font(); f.setWeight(QFont::Black); text->setFont(f);
             }
+            // 存入 Map 以便后续控制显隐（如悬停时隐藏标签）
             nodeLabelItems.insert(node.id, text);
         }
     }
+}
+
+void MapWidget::setBackgroundImage(const QString& path)
+{
+    m_bgPath = path; 
+    QPixmap px(path);
+    if (px.isNull()) return;
     
-    if (!backgroundItem) {
-        double minX=1e9, minY=1e9, maxX=-1e9, maxY=-1e9;
-        for(const auto& n: nodes) {
-            minX = std::min(minX, n.x); minY = std::min(minY, n.y);
-            maxX = std::max(maxX, n.x); maxY = std::max(maxY, n.y);
-        }
-        if(minX < maxX) scene->setSceneRect(minX-50, minY-50, maxX-minX+100, maxY-minY+100);
+    if (backgroundItem) { 
+        scene->removeItem(backgroundItem); 
+        delete backgroundItem; 
+        backgroundItem = nullptr;
     }
+    
+    scene->setSceneRect(0, 0, px.width(), px.height());
+    backgroundItem = scene->addPixmap(px);
+    backgroundItem->setZValue(-100);
+    backgroundItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
 }
 
 void MapWidget::clearHoverItems() {
@@ -296,19 +358,15 @@ void MapWidget::killDyingItems() {
 
 void MapWidget::fadeOutHoverItems() {
     if (hoverItems.isEmpty()) return;
-
     for (int nid : hiddenLabelNodeIds) if (nodeLabelItems.contains(nid) && nodeLabelItems[nid]) nodeLabelItems[nid]->setVisible(true);
     hiddenLabelNodeIds.clear();
-
     stopHoverAnimations(); 
-
     dyingItems.append(hoverItems);
     hoverItems.clear();
 
     auto* group = new QParallelAnimationGroup(this);
     for (auto* it : dyingItems) {
         if (!it) continue;
-
         QGraphicsObject* obj = dynamic_cast<QGraphicsObject*>(it);
         if (obj) {
             auto* a_op = new QPropertyAnimation(obj, "opacity", this);
@@ -316,7 +374,6 @@ void MapWidget::fadeOutHoverItems() {
             a_op->setStartValue(obj->opacity());
             a_op->setEndValue(0.0);
             group->addAnimation(a_op);
-
             HoverBubble* hb = qobject_cast<HoverBubble*>(obj);
             if (hb) {
                 auto* a_sc = new QPropertyAnimation(hb, "bubbleScale", this);
@@ -326,16 +383,10 @@ void MapWidget::fadeOutHoverItems() {
                 group->addAnimation(a_sc);
             }
         } else {
-            scene->removeItem(it);
-            delete it;
+            scene->removeItem(it); delete it;
         }
     }
-    
-    connect(group, &QAbstractAnimation::finished, this, [this, group]() {
-        killDyingItems();
-        group->deleteLater();
-    });
-    
+    connect(group, &QAbstractAnimation::finished, this, [this, group]() { killDyingItems(); group->deleteLater(); });
     hoverAnims.push_back(QPointer<QAbstractAnimation>(group));
     group->start();
 }
@@ -344,11 +395,9 @@ QColor MapWidget::withAlpha(const QColor& c, int alpha) { QColor t=c; t.setAlpha
 
 void MapWidget::startHoverAppearAnimation() {
     auto* group = new QParallelAnimationGroup(this);
-
     for (auto* it : hoverItems) {
         if (!it) continue;
         it->setOpacity(0.0);
-
         QGraphicsObject* obj = dynamic_cast<QGraphicsObject*>(it);
         if (obj) {
             auto* a_op = new QPropertyAnimation(obj, "opacity", this);
@@ -356,7 +405,6 @@ void MapWidget::startHoverAppearAnimation() {
             a_op->setStartValue(0.0);
             a_op->setEndValue(1.0); 
             group->addAnimation(a_op);
-
             HoverBubble* hb = qobject_cast<HoverBubble*>(obj);
             if (hb) {
                 hb->setBubbleScale(0.92); 
@@ -369,453 +417,268 @@ void MapWidget::startHoverAppearAnimation() {
             }
         }
     }
-    
     connect(group, &QAbstractAnimation::finished, group, &QObject::deleteLater);
     hoverAnims.push_back(QPointer<QAbstractAnimation>(group));
     group->start();
 }
 
 void MapWidget::showNodeHoverBubble(const Node& node) {
-    stopHoverAnimations();
-    killDyingItems();
-    clearHoverItems(); 
-    
+    stopHoverAnimations(); killDyingItems(); clearHoverItems(); 
     auto* halo = new HaloItem(QPointF(node.x, node.y), 45.0); 
-    scene->addItem(halo);
-    hoverItems.push_back(halo);
+    scene->addItem(halo); hoverItems.push_back(halo);
 
     const QColor bubbleColor(255, 255, 255, 215); 
     HoverBubble* hb = new HoverBubble();
-    hb->setIsEdge(false);
-    hb->setBaseColor(bubbleColor);
+    hb->setIsEdge(false); hb->setBaseColor(bubbleColor);
     hb->setContent(node.name, node.description);
     hb->setCenterAt(QPointF(node.x, node.y));
     hb->setZValue(100);
-    
     double screenW = this->viewport()->width();
     currentBubbleScale = (screenW / 1280.0) * 1.8; 
     currentBubbleScale = std::clamp(currentBubbleScale, 1.2, 3.0); 
-    
     hb->setBubbleScale(currentBubbleScale);
-
-    scene->addItem(hb);
-    hoverItems.push_back(hb);
+    scene->addItem(hb); hoverItems.push_back(hb);
     
     if (nodeLabelItems.contains(node.id) && nodeLabelItems[node.id]) {
         nodeLabelItems[node.id]->setVisible(false);
         hiddenLabelNodeIds.push_back(node.id);
     }
-    
     startHoverAppearAnimation();
 }
 
 void MapWidget::showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoint) {
-    stopHoverAnimations();
-    killDyingItems();
-    clearHoverItems();
-
+    stopHoverAnimations(); killDyingItems(); clearHoverItems();
     QMap<int, Node> nodeMap; for (const auto& n : cachedNodes) nodeMap.insert(n.id, n);
     if (!nodeMap.contains(edge.u) || !nodeMap.contains(edge.v)) return;
     Node u = nodeMap[edge.u]; Node v = nodeMap[edge.v];
     
     auto* glow = new GlowItem(QPointF(u.x, u.y), QPointF(v.x, v.y), 24.0); 
-    scene->addItem(glow);
-    hoverItems.push_back(glow);
+    scene->addItem(glow); hoverItems.push_back(glow);
 
     const QColor baseEdgeColor = edgePenForType(edge.type).color();
-    QColor bubbleColor = baseEdgeColor.lighter(170); 
-    bubbleColor.setAlpha(225); 
-    
+    QColor bubbleColor = baseEdgeColor.lighter(170); bubbleColor.setAlpha(225); 
     HoverBubble* hb = new HoverBubble();
-    hb->setIsEdge(true);
-    hb->setBaseColor(bubbleColor);
+    hb->setIsEdge(true); hb->setBaseColor(bubbleColor);
     hb->setContent(edge.name.isEmpty() ? QString("%1-%2").arg(edge.u).arg(edge.v) : edge.name, edge.description);
     QPointF A(u.x, u.y), B(v.x, v.y);
     hb->setEdgeLine(A, B);
     hb->setZValue(100);
-    
     double screenW = this->viewport()->width();
     currentBubbleScale = (screenW / 1280.0) * 1.8;
     currentBubbleScale = std::clamp(currentBubbleScale, 1.2, 3.0);
     hb->setBubbleScale(currentBubbleScale);
-
-    scene->addItem(hb);
-    hoverItems.push_back(hb);
-    
+    scene->addItem(hb); hoverItems.push_back(hb);
     startHoverAppearAnimation();
 }
 
-void MapWidget::setEditMode(EditMode mode)
-{
+void MapWidget::setEditMode(EditMode mode) {
     currentMode = mode;
-    connectFirstNodeId = -1; 
-    setActiveEdge(-1, -1); 
-    clearPathHighlight();
-    fadeOutHoverItems(); 
+    connectFirstNodeId = -1; setActiveEdge(-1, -1); 
+    clearPathHighlight(); fadeOutHoverItems(); 
     drawMap(cachedNodes, cachedEdges); 
 }
 
-void MapWidget::setBackgroundImage(const QString& path)
-{
-    QPixmap px(path);
-    if (px.isNull()) return;
-    if (backgroundItem) { scene->removeItem(backgroundItem); delete backgroundItem; }
-    
-    scene->setSceneRect(0, 0, px.width(), px.height());
-    backgroundItem = scene->addPixmap(px);
-    backgroundItem->setZValue(-100);
-    backgroundItem->setFlag(QGraphicsItem::ItemIsSelectable, false);
-}
-
-void MapWidget::mousePressEvent(QMouseEvent *event)
-{
+void MapWidget::mousePressEvent(QMouseEvent *event) {
     QPointF scenePos = mapToScene(event->pos());
-
     if (event->button() == Qt::MiddleButton) {
-        isMiddlePanning = true;
-        lastPanPos = event->pos();
-        setCursor(Qt::ClosedHandCursor);
-        event->accept();
-        return;
+        isMiddlePanning = true; lastPanPos = event->pos(); setCursor(Qt::ClosedHandCursor); event->accept(); return;
     }
-
     if (event->button() == Qt::RightButton) {
         if (currentMode == EditMode::None) {
             int hitId = findNodeAt(scenePos);
             if (hitId != -1) {
-                QString name; 
-                for(const auto&n:cachedNodes) if(n.id==hitId) name=n.name;
-                fadeOutHoverItems();
-                emit nodeClicked(hitId, name, false); 
+                QString name; for(const auto&n:cachedNodes) if(n.id==hitId) name=n.name;
+                fadeOutHoverItems(); emit nodeClicked(hitId, name, false); 
             }
         } else {
             if (currentMode == EditMode::ConnectEdge && connectFirstNodeId != -1) {
-                connectFirstNodeId = -1;
-                drawMap(cachedNodes, cachedEdges); 
-            } else {
-                emit undoRequested();
-            }
+                connectFirstNodeId = -1; drawMap(cachedNodes, cachedEdges); 
+            } else { emit undoRequested(); }
         }
-        event->accept();
-        return;
+        event->accept(); return;
     }
-
     if (event->button() == Qt::LeftButton) {
         int hitId = findNodeAt(scenePos);
-
         if (currentMode != EditMode::None && (event->modifiers() & Qt::ControlModifier) && hitId != -1) {
             if (currentMode != EditMode::ConnectEdge) { 
-                isNodeDragging = true;
-                draggingNodeId = hitId;
-                lastScenePos = scenePos;
-                setCursor(Qt::SizeAllCursor);
-                emit nodeEditClicked(hitId, true);
-                drawMap(cachedNodes, cachedEdges); 
-                event->accept();
-                return;
+                isNodeDragging = true; draggingNodeId = hitId; lastScenePos = scenePos;
+                setCursor(Qt::SizeAllCursor); emit nodeEditClicked(hitId, true);
+                drawMap(cachedNodes, cachedEdges); event->accept(); return;
             }
         }
-
         if (currentMode == EditMode::None) {
             if (hitId != -1) {
-                fadeOutHoverItems(); 
-                QString name;
-                for(const auto&n:cachedNodes) if(n.id==hitId) name=n.name;
+                fadeOutHoverItems(); QString name; for(const auto&n:cachedNodes) if(n.id==hitId) name=n.name;
                 emit nodeClicked(hitId, name, true); 
             }
-        }
-        else if (currentMode == EditMode::ConnectEdge) {
+        } else if (currentMode == EditMode::ConnectEdge) {
             if (hitId != -1) {
                 if (connectFirstNodeId == -1) {
-                    connectFirstNodeId = hitId;
-                    drawMap(cachedNodes, cachedEdges); 
+                    connectFirstNodeId = hitId; drawMap(cachedNodes, cachedEdges); 
                 } else if (hitId != connectFirstNodeId) {
                     emit edgeConnectionRequested(connectFirstNodeId, hitId);
-                    connectFirstNodeId = -1;
-                    drawMap(cachedNodes, cachedEdges); 
+                    connectFirstNodeId = -1; drawMap(cachedNodes, cachedEdges); 
                 }
             }
-        }
-        else if (currentMode == EditMode::AddBuilding || currentMode == EditMode::AddGhost) {
-            if (hitId != -1) {
-                emit nodeEditClicked(hitId, false);
-            } else {
-                emit emptySpaceClicked(scenePos.x(), scenePos.y());
-            }
+        } else if (currentMode == EditMode::AddBuilding || currentMode == EditMode::AddGhost) {
+            if (hitId != -1) emit nodeEditClicked(hitId, false);
+            else emit emptySpaceClicked(scenePos.x(), scenePos.y());
         }
         event->accept();
     }
 }
 
-void MapWidget::mouseMoveEvent(QMouseEvent *event)
-{
+void MapWidget::mouseMoveEvent(QMouseEvent *event) {
     QPointF scenePos = mapToScene(event->pos());
-
     if (isMiddlePanning) {
         QPoint delta = event->pos() - lastPanPos;
         horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
         verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
-        lastPanPos = event->pos();
-        event->accept();
-        return;
+        lastPanPos = event->pos(); event->accept(); return;
     }
-
     if (isNodeDragging && draggingNodeId != -1) {
         double dx = scenePos.x() - lastScenePos.x();
         double dy = scenePos.y() - lastScenePos.y();
         for(auto& n : cachedNodes) {
             if(n.id == draggingNodeId) {
-                emit nodeMoved(draggingNodeId, n.x + dx, n.y + dy);
-                lastScenePos = scenePos;
-                break;
+                emit nodeMoved(draggingNodeId, n.x + dx, n.y + dy); lastScenePos = scenePos; break;
             }
         }
-        event->accept();
-        return;
+        event->accept(); return;
     }
-
     int hitNode = findNodeAt(scenePos);
-    
     if (currentMode == EditMode::ConnectEdge) {
         if (hitNode != hoveredNodeId) {
-            hoveredNodeId = hitNode;
-            drawMap(cachedNodes, cachedEdges); 
+            hoveredNodeId = hitNode; drawMap(cachedNodes, cachedEdges); 
         }
-        event->accept();
-        return;
+        event->accept(); return;
     }
-
     if (currentMode == EditMode::None && event->buttons() == Qt::NoButton) {
         if (hitNode != -1) {
             if (hoveredNodeId != hitNode || hoveredEdgeIndex != -1) {
-                stopHoverAnimations();
-                clearHoverItems(); 
-                hoveredNodeId = hitNode;
-                hoveredEdgeIndex = -1;
-                for (const auto& n : cachedNodes) {
-                    if (n.id == hitNode) { showNodeHoverBubble(n); break; }
-                }
+                stopHoverAnimations(); clearHoverItems(); 
+                hoveredNodeId = hitNode; hoveredEdgeIndex = -1;
+                for (const auto& n : cachedNodes) { if (n.id == hitNode) { showNodeHoverBubble(n); break; } }
             }
             event->accept(); return;
         }
-
         QPointF closest; int u=-1, v=-1;
         int edgeIdx = findEdgeAt(scenePos, closest, u, v);
         if (edgeIdx != -1) {
             if (hoveredEdgeIndex != edgeIdx || hoveredNodeId != -1) {
-                stopHoverAnimations();
-                clearHoverItems();
-                hoveredEdgeIndex = edgeIdx;
-                hoveredNodeId = -1;
+                stopHoverAnimations(); clearHoverItems();
+                hoveredEdgeIndex = edgeIdx; hoveredNodeId = -1;
                 showEdgeHoverBubble(cachedEdges[edgeIdx], closest);
             }
             event->accept(); return;
         }
-
         if (hoveredNodeId != -1 || hoveredEdgeIndex != -1) {
-            hoveredNodeId = -1; hoveredEdgeIndex = -1;
-            fadeOutHoverItems(); 
+            hoveredNodeId = -1; hoveredEdgeIndex = -1; fadeOutHoverItems(); 
         }
     }
-
     QGraphicsView::mouseMoveEvent(event);
 }
 
-void MapWidget::mouseReleaseEvent(QMouseEvent *event)
-{
-    if (event->button() == Qt::MiddleButton) {
-        isMiddlePanning = false;
-        setCursor(Qt::ArrowCursor);
-    }
+void MapWidget::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() == Qt::MiddleButton) { isMiddlePanning = false; setCursor(Qt::ArrowCursor); }
     if (event->button() == Qt::LeftButton && isNodeDragging) {
-        isNodeDragging = false;
-        draggingNodeId = -1;
-        setCursor(Qt::ArrowCursor);
-        drawMap(cachedNodes, cachedEdges); 
+        isNodeDragging = false; draggingNodeId = -1; setCursor(Qt::ArrowCursor); drawMap(cachedNodes, cachedEdges); 
     }
     QGraphicsView::mouseReleaseEvent(event);
 }
 
-void MapWidget::wheelEvent(QWheelEvent *event)
-{
+void MapWidget::wheelEvent(QWheelEvent *event) {
     fadeOutHoverItems(); 
-
-    double viewW = viewport()->width();
-    double viewH = viewport()->height();
-    double sceneW = scene->width();
-    double sceneH = scene->height();
-    
-    if (sceneW <= 0 || sceneH <= 0) {
-        QGraphicsView::wheelEvent(event);
-        return;
-    }
-
-    double minScaleX = viewW / sceneW;
-    double minScaleY = viewH / sceneH;
+    double viewW = viewport()->width(); double viewH = viewport()->height();
+    double sceneW = scene->width(); double sceneH = scene->height();
+    if (sceneW <= 0 || sceneH <= 0) { QGraphicsView::wheelEvent(event); return; }
+    double minScaleX = viewW / sceneW; double minScaleY = viewH / sceneH;
     double minScale = std::max(minScaleX, minScaleY);
-    
-    double currentTransformScale = transform().m11();
-    const double scaleFactor = 1.15;
+    double currentTransformScale = transform().m11(); const double scaleFactor = 1.15;
     double newScale = currentTransformScale;
-
-    if (event->angleDelta().y() > 0) {
-        this->scale(scaleFactor, scaleFactor);
-    } else {
+    if (event->angleDelta().y() > 0) this->scale(scaleFactor, scaleFactor);
+    else {
         newScale /= scaleFactor;
         if (newScale < minScale) {
-            double factor = minScale / currentTransformScale;
-            if (factor < 1.0) this->scale(factor, factor);
-        } else {
-            this->scale(1.0 / scaleFactor, 1.0 / scaleFactor);
-        }
+            double factor = minScale / currentTransformScale; if (factor < 1.0) this->scale(factor, factor);
+        } else this->scale(1.0 / scaleFactor, 1.0 / scaleFactor);
     }
     event->accept();
 }
 
-void MapWidget::highlightPath(const QVector<int>& pathNodeIds, double animationDuration)
-{
-    if (currentPathNodeIds == pathNodeIds && animationTimer->isActive()) {
-        return;
-    }
-
+void MapWidget::highlightPath(const QVector<int>& pathNodeIds, double animationDuration) {
+    if (currentPathNodeIds == pathNodeIds && animationTimer->isActive()) return;
     clearPathHighlight();
-    
     if (pathNodeIds.size() < 2) return;
-
-    currentPathNodeIds = pathNodeIds;
-    animationDurationMs = animationDuration * 1000.0;
-    animationProgress = 0.0;
-    animationStartTime = QDateTime::currentMSecsSinceEpoch();
+    currentPathNodeIds = pathNodeIds; animationDurationMs = animationDuration * 1000.0;
+    animationProgress = 0.0; animationStartTime = QDateTime::currentMSecsSinceEpoch();
 
     QPainterPath fullPath;
-    QMap<int, Node> nodeMap; 
-    for(const auto& n : cachedNodes) nodeMap.insert(n.id, n);
-
-    Node start = nodeMap[pathNodeIds[0]];
-    fullPath.moveTo(start.x, start.y);
-    for(int i=1; i<pathNodeIds.size(); ++i) {
-        Node n = nodeMap[pathNodeIds[i]];
-        fullPath.lineTo(n.x, n.y);
-    }
+    QMap<int, Node> nodeMap; for(const auto& n : cachedNodes) nodeMap.insert(n.id, n);
+    Node start = nodeMap[pathNodeIds[0]]; fullPath.moveTo(start.x, start.y);
+    for(int i=1; i<pathNodeIds.size(); ++i) { Node n = nodeMap[pathNodeIds[i]]; fullPath.lineTo(n.x, n.y); }
     
-    QPen trackPen(QColor(0, 122, 255, 40)); 
-    trackPen.setWidth(8); 
-    trackPen.setCapStyle(Qt::RoundCap);
-    trackPen.setJoinStyle(Qt::RoundJoin);
-    activeTrackItem = scene->addPath(fullPath, trackPen);
-    activeTrackItem->setZValue(15);
-
+    QPen trackPen(QColor(0, 122, 255, 40)); trackPen.setWidth(8); 
+    trackPen.setCapStyle(Qt::RoundCap); trackPen.setJoinStyle(Qt::RoundJoin);
+    activeTrackItem = scene->addPath(fullPath, trackPen); activeTrackItem->setZValue(15);
     animationTimer->start(16);
 }
 
-void MapWidget::onAnimationTick()
-{
+void MapWidget::onAnimationTick() {
     if (currentPathNodeIds.isEmpty()) { animationTimer->stop(); return; }
-    
     qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - animationStartTime;
     animationProgress = (double)elapsed / animationDurationMs;
-
-    if (animationProgress >= 1.0) {
-        animationProgress = 1.0;
-        animationTimer->stop();
-    }
+    if (animationProgress >= 1.0) { animationProgress = 1.0; animationTimer->stop(); }
     drawPathGrowthAnimation();
 }
 
-void MapWidget::drawPathGrowthAnimation()
-{
-    if (activeGrowthItem) {
-        scene->removeItem(activeGrowthItem);
-        delete activeGrowthItem;
-        activeGrowthItem = nullptr;
-    }
-
-    QMap<int, Node> nodeMap;
-    for(const auto& n : cachedNodes) nodeMap.insert(n.id, n);
-
-    QPainterPath currPath;
-    Node n0 = nodeMap[currentPathNodeIds[0]];
-    currPath.moveTo(n0.x, n0.y);
-
-    double totalSegs = currentPathNodeIds.size() - 1;
-    double currentPos = animationProgress * totalSegs;
-    int segIndex = (int)currentPos;
-    double segLocalProgress = currentPos - segIndex;
-
+void MapWidget::drawPathGrowthAnimation() {
+    if (activeGrowthItem) { scene->removeItem(activeGrowthItem); delete activeGrowthItem; activeGrowthItem = nullptr; }
+    QMap<int, Node> nodeMap; for(const auto& n : cachedNodes) nodeMap.insert(n.id, n);
+    QPainterPath currPath; Node n0 = nodeMap[currentPathNodeIds[0]]; currPath.moveTo(n0.x, n0.y);
+    double totalSegs = currentPathNodeIds.size() - 1; double currentPos = animationProgress * totalSegs;
+    int segIndex = (int)currentPos; double segLocalProgress = currentPos - segIndex;
     QPointF tipPos(n0.x, n0.y);
-
     for (int i = 0; i < segIndex && i < totalSegs; ++i) {
-        Node n = nodeMap[currentPathNodeIds[i+1]];
-        currPath.lineTo(n.x, n.y);
-        tipPos = QPointF(n.x, n.y);
+        Node n = nodeMap[currentPathNodeIds[i+1]]; currPath.lineTo(n.x, n.y); tipPos = QPointF(n.x, n.y);
     }
-
     if (segIndex < totalSegs) {
-        Node start = nodeMap[currentPathNodeIds[segIndex]];
-        Node end   = nodeMap[currentPathNodeIds[segIndex+1]];
-        double dx = end.x - start.x;
-        double dy = end.y - start.y;
-        tipPos = QPointF(start.x + dx*segLocalProgress, start.y + dy*segLocalProgress);
-        currPath.lineTo(tipPos);
+        Node start = nodeMap[currentPathNodeIds[segIndex]]; Node end = nodeMap[currentPathNodeIds[segIndex+1]];
+        double dx = end.x - start.x; double dy = end.y - start.y;
+        tipPos = QPointF(start.x + dx*segLocalProgress, start.y + dy*segLocalProgress); currPath.lineTo(tipPos);
     }
-
-    QPen growPen(QColor("#007AFF"));
-    growPen.setWidth(5);
-    growPen.setCapStyle(Qt::RoundCap);
-    growPen.setJoinStyle(Qt::RoundJoin);
-    
-    activeGrowthItem = scene->addPath(currPath, growPen);
-    activeGrowthItem->setZValue(20);
+    QPen growPen(QColor("#007AFF")); growPen.setWidth(5); 
+    growPen.setCapStyle(Qt::RoundCap); growPen.setJoinStyle(Qt::RoundJoin);
+    activeGrowthItem = scene->addPath(currPath, growPen); activeGrowthItem->setZValue(20);
 }
 
-void MapWidget::clearPathHighlight()
-{
+void MapWidget::clearPathHighlight() {
     if (animationTimer->isActive()) animationTimer->stop();
-    animationProgress = 0.0;
-    currentPathNodeIds.clear();
-    
-    if (activeTrackItem) {
-        scene->removeItem(activeTrackItem);
-        delete activeTrackItem;
-        activeTrackItem = nullptr;
-    }
-    if (activeGrowthItem) {
-        scene->removeItem(activeGrowthItem);
-        delete activeGrowthItem;
-        activeGrowthItem = nullptr;
-    }
-    
+    animationProgress = 0.0; currentPathNodeIds.clear();
+    if (activeTrackItem) { scene->removeItem(activeTrackItem); delete activeTrackItem; activeTrackItem = nullptr; }
+    if (activeGrowthItem) { scene->removeItem(activeGrowthItem); delete activeGrowthItem; activeGrowthItem = nullptr; }
     this->viewport()->update();
 }
 
 void MapWidget::pauseHoverAnimations() {
-    for (auto &a : hoverAnims) {
-        if (a && a->state() == QAbstractAnimation::Running) {
-            a->pause();
-        }
-    }
+    for (auto &a : hoverAnims) if (a && a->state() == QAbstractAnimation::Running) a->pause();
 }
-
 void MapWidget::resumeHoverAnimations() {
-    for (auto &a : hoverAnims) {
-        if (a && a->state() == QAbstractAnimation::Paused) {
-            a->resume();
-        }
-    }
+    for (auto &a : hoverAnims) if (a && a->state() == QAbstractAnimation::Paused) a->resume();
 }
-
 void MapWidget::resizeEvent(QResizeEvent *event) {
-    QGraphicsView::resizeEvent(event);
-    pauseHoverAnimations();
-    if (hoverResumeTimer) {
-        hoverResumeTimer->start(300);
+    QGraphicsView::resizeEvent(event); 
+    pauseHoverAnimations(); 
+    if (hoverResumeTimer) hoverResumeTimer->start(300);
+    
+    // 天气层跟随缩放
+    if (weatherOverlay) {
+        QPointF sceneTopLeft = mapToScene(0, 0);
+        weatherOverlay->setPos(sceneTopLeft);
+        weatherOverlay->setOverlayRect(QRectF(0, 0, event->size().width(), event->size().height()));
     }
 }
-
-void MapWidget::leaveEvent(QEvent *event) {
-    Q_UNUSED(event);
-    fadeOutHoverItems();
-}
+void MapWidget::leaveEvent(QEvent *event) { Q_UNUSED(event); fadeOutHoverItems(); }
 
 int MapWidget::findNodeAt(const QPointF& pos) {
     double threshold = 30.0; 
@@ -830,8 +693,7 @@ int MapWidget::findNodeAt(const QPointF& pos) {
 int MapWidget::findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV) {
     if (cachedEdges.isEmpty() || cachedNodes.isEmpty()) return -1;
     QMap<int, Node> nodeMap; for (const auto& n : cachedNodes) nodeMap.insert(n.id, n);
-    int bestIdx = -1; double bestDist = 1e18; QPointF bestPt;
-    int bu=-1, bv=-1; 
+    int bestIdx = -1; double bestDist = 1e18; QPointF bestPt; int bu=-1, bv=-1; 
     const double threshold = 20.0; 
     for (int i = 0; i < cachedEdges.size(); ++i) {
         const auto& e = cachedEdges[i];
@@ -851,57 +713,31 @@ int MapWidget::findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, 
 }
 
 QPen MapWidget::edgePenForType(EdgeType type) const {
-    // 【修改】普通道路颜色加深：#A0A0A5 (中深灰)
-    QColor c(160, 160, 165); 
-    int width = 3;
-    
+    QColor c(160, 160, 165); int width = 3;
     switch (type) {
-    case EdgeType::Normal: 
-        c = QColor(160, 160, 165); width = 3; 
-        break;
-    case EdgeType::Main:   
-        c = QColor(160, 190, 220); width = 4; 
-        break;
-    case EdgeType::Path:   
-        c = QColor(160, 200, 160); width = 2; 
-        break;
-    case EdgeType::Indoor: 
-        c = QColor(210, 180, 160); width = 2; 
-        break;
-    case EdgeType::Stairs: 
-        c = QColor(255, 149, 0); width = 2; 
-        break; 
+    case EdgeType::Normal: c = QColor(160, 160, 165); width = 3; break;
+    case EdgeType::Main:   c = QColor(160, 190, 220); width = 4; break;
+    case EdgeType::Path:   c = QColor(160, 200, 160); width = 2; break;
+    case EdgeType::Indoor: c = QColor(210, 180, 160); width = 2; break;
+    case EdgeType::Stairs: c = QColor(255, 149, 0); width = 2; break; 
     }
-    
-    QPen pen(c); 
-    pen.setWidth(width);
-    pen.setJoinStyle(Qt::RoundJoin); 
-    pen.setCapStyle(Qt::RoundCap);
+    QPen pen(c); pen.setWidth(width); pen.setJoinStyle(Qt::RoundJoin); pen.setCapStyle(Qt::RoundCap);
     return pen;
 }
 
+// 占位函数：防止 EditorWindow 调用时报错
 void MapWidget::addEditVisualNode(int id, const QString& name, const QPointF& pos, int typeInt) {
-    NodeType type = (typeInt == 9) ? NodeType::Ghost : NodeType::Visible;
-    QPen p(type == NodeType::Ghost ? QColor(140,140,160) : QColor("#007AFF"));
-    QBrush b(type == NodeType::Ghost ? QColor(230,230,240) : QColor("#007AFF"));
-    
-    double r = (type == NodeType::Ghost) ? 8.0 : 12.0; 
-    
-    auto* item = scene->addEllipse(pos.x()-r, pos.y()-r, 2*r, 2*r, p, b);
-    item->setZValue(12);
-    editTempItems.append(item);
-
-    if (!name.isEmpty()) {
-        auto* text = scene->addText(name);
-        QRectF bounds = text->boundingRect();
-        text->setPos(pos.x() - bounds.width()/2.0, pos.y() + r + 2);
-        editTempItems.append(text);
-    }
+}
+void MapWidget::clearEditTempItems() {
 }
 
-void MapWidget::clearEditTempItems() {
-    for (auto* it : editTempItems) {
-        if (it) { scene->removeItem(it); delete it; }
+// 设置天气接口实现
+void MapWidget::setWeather(Weather weatherType) {
+    m_currentWeatherState = weatherType;
+    if (weatherOverlay) {
+        OverlayType ot = OverlayType::Sunny;
+        if (weatherType == Weather::Rainy) ot = OverlayType::Rainy;
+        if (weatherType == Weather::Snowy) ot = OverlayType::Snowy;
+        weatherOverlay->setWeatherType(ot);
     }
-    editTempItems.clear();
 }

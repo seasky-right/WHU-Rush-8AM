@@ -2,6 +2,8 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
 #include <queue>
 #include <limits>
 #include <cmath>
@@ -18,7 +20,6 @@ GraphModel::GraphModel() {
 }
 
 bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
-    // 【新增】记住路径，方便后续 autoSave 使用
     m_nodesPath = nodesPath;
     m_edgesPath = edgesPath;
 
@@ -37,7 +38,7 @@ bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
         }
         nodeFile.close();
     } else {
-        qDebug() << "❌ Error: 无法打开节点文件:" << nodesPath;
+        qDebug() << "⚠️ Warning: 无法打开节点文件 (可能是首次运行):" << nodesPath;
     }
 
     // 2. 加载边
@@ -53,14 +54,54 @@ bool GraphModel::loadData(const QString& nodesPath, const QString& edgesPath) {
 
     // 3. 构建邻接表
     buildAdjacencyList();
+    
+    // 【关键修复】加载完成后，再次校准 ID 计数器，确保比现有的都大
+    for (auto it = nodesMap.begin(); it != nodesMap.end(); ++it) {
+        int id = it.key();
+        if (it.value().type == NodeType::Visible) {
+            if (id >= maxBuildingId) maxBuildingId = id + 1;
+        } else {
+            if (id >= maxRoadId) maxRoadId = id + 1;
+        }
+    }
+
     qDebug() << "✅ 数据加载完毕: Nodes=" << nodesMap.size() << " Edges=" << edgesList.size();
     return true;
 }
 
+// 加载时刻表
+bool GraphModel::loadSchedule(const QString& csvPath) {
+    stationSchedules.clear();
+    QFile file(csvPath);
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+        while (!in.atEnd()) {
+            QString line = in.readLine().trimmed();
+            parseScheduleLine(line);
+        }
+        file.close();
+        qDebug() << "✅ 时刻表加载完毕: 包含" << stationSchedules.size() << "个站点数据";
+        return true;
+    } else {
+        qDebug() << "⚠️ Warning: 无法打开时刻表文件:" << csvPath;
+        return false;
+    }
+}
+
 bool GraphModel::saveData(const QString& nodesPath, const QString& edgesPath) {
+    // 【关键修复】确保目录存在
+    QFileInfo fileInfo(nodesPath);
+    QDir dir = fileInfo.absoluteDir();
+    if (!dir.exists()) {
+        dir.mkpath(".");
+    }
+
     // 保存节点
     QFile nodeFile(nodesPath);
-    if (!nodeFile.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
+    if (!nodeFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qDebug() << "❌ Error: 无法写入节点文件:" << nodesPath;
+        return false;
+    }
     QTextStream outNode(&nodeFile);
     outNode.setEncoding(QStringConverter::Utf8);
     
@@ -78,7 +119,10 @@ bool GraphModel::saveData(const QString& nodesPath, const QString& edgesPath) {
 
     // 保存边
     QFile edgeFile(edgesPath);
-    if (!edgeFile.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
+    if (!edgeFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qDebug() << "❌ Error: 无法写入边文件:" << edgesPath;
+        return false;
+    }
     QTextStream outEdge(&edgeFile);
     outEdge.setEncoding(QStringConverter::Utf8);
     for(const auto& e : edgesList) {
@@ -112,15 +156,6 @@ void GraphModel::parseNodeLine(const QString& line) {
         node.category = NodeCategory::None;
     }
     nodesMap.insert(node.id, node);
-
-    // 【重要】加载数据时，必须更新 maxBuildingId 和 maxRoadId
-    // 确保它们比文件中现有的 ID 都要大
-    if (node.type == NodeType::Visible) {
-        if (node.id >= maxBuildingId) maxBuildingId = node.id + 1;
-    } 
-    else if (node.type == NodeType::Ghost) { // 路口
-        if (node.id >= maxRoadId) maxRoadId = node.id + 1;
-    }
 }
 
 void GraphModel::parseEdgeLine(const QString& line) {
@@ -145,11 +180,27 @@ void GraphModel::parseEdgeLine(const QString& line) {
     edgesList.append(edge);
 }
 
+void GraphModel::parseScheduleLine(const QString& line) {
+    if (line.isEmpty() || line.startsWith("#")) return;
+    QStringList parts = line.split(",");
+    if (parts.size() < 2) return;
+
+    int stationId = parts[0].toInt();
+    QVector<QTime> times;
+    for (int i = 1; i < parts.size(); ++i) {
+        QString tStr = parts[i].trimmed();
+        QTime t = QTime::fromString(tStr, "H:mm");
+        if (!t.isValid()) t = QTime::fromString(tStr, "HH:mm");
+        if (t.isValid()) times.append(t);
+    }
+    std::sort(times.begin(), times.end());
+    stationSchedules.insert(stationId, times);
+}
+
 void GraphModel::buildAdjacencyList() {
     adj.clear();
     for (const auto& edge : edgesList) {
         adj[edge.u].append(edge);
-        
         Edge rev = edge;
         std::swap(rev.u, rev.v);
         rev.slope = -edge.slope; 
@@ -165,17 +216,9 @@ int GraphModel::addNode(double x, double y, NodeType type) {
     // 1. 获取对应的计数器指针
     int* pCounter = (type == NodeType::Visible) ? &maxBuildingId : &maxRoadId;
 
-    // 2. 【修复】安全查找空闲 ID (防止死循环)
-    int loopSafetyLimit = 100000; // 熔断阈值
-    int loopCount = 0;
-    
+    // 2. 【关键修复】强制递增直到找到空闲 ID
     while (nodesMap.contains(*pCounter)) {
         (*pCounter)++;
-        loopCount++;
-        if (loopCount > loopSafetyLimit) {
-            qDebug() << "❌ 严重错误: ID 生成器陷入死循环，强制中断。当前 ID:" << *pCounter;
-            break; 
-        }
     }
 
     // 3. 取出当前可用 ID
@@ -203,9 +246,7 @@ int GraphModel::addNode(double x, double y, NodeType type) {
     act.nodeData = n;
     undoStack.push(act);
     
-    // 4. 执行自动保存
     autoSave();
-    
     return id;
 }
 
@@ -226,14 +267,12 @@ void GraphModel::deleteNode(int id) {
     act.nodeData = target;
     undoStack.push(act);
 
-    // 【新增】立即保存
     autoSave();
 }
 
 void GraphModel::updateNode(const Node& n) {
     if (nodesMap.contains(n.id)) {
         nodesMap[n.id] = n;
-        // 【新增】立即保存
         autoSave();
     }
 }
@@ -256,8 +295,6 @@ void GraphModel::addOrUpdateEdge(const Edge& edge) {
         undoStack.push(act);
     }
     buildAdjacencyList();
-    
-    // 【新增】立即保存
     autoSave();
 }
 
@@ -273,7 +310,6 @@ void GraphModel::deleteEdge(int u, int v) {
             edgesList.removeAt(i);
             buildAdjacencyList();
             
-            // 【新增】立即保存
             autoSave();
             return;
         }
@@ -293,7 +329,7 @@ void GraphModel::undo() {
         break;
     case HistoryAction::AddEdge:
         deleteEdge(act.edgeData.u, act.edgeData.v); 
-        undoStack.pop(); // 因为 deleteEdge 内部又 push 了一次，需要弹出来防止重复
+        undoStack.pop(); 
         break;
     case HistoryAction::DeleteEdge:
         edgesList.append(act.edgeData);
@@ -303,8 +339,6 @@ void GraphModel::undo() {
         nodesMap[act.nodeData.id] = act.nodeData; 
         break;
     }
-    
-    // 【新增】立即保存
     autoSave();
 }
 
@@ -315,24 +349,22 @@ void GraphModel::pushAction(const HistoryAction& action) {
 }
 
 // =========================================================
-//  核心物理与寻路逻辑 (物理引擎 + 单模式路线生成)
+//  核心物理与寻路逻辑
 // =========================================================
 
 double GraphModel::getRealSpeed(TransportMode mode, Weather weather) const {
     double speed = 0.0;
-    
     switch(mode) {
         case TransportMode::Walk:
             speed = Config::SPEED_WALK;
-            if (weather == Weather::Rainy) speed *= 0.8; // 雨天 -20%
-            if (weather == Weather::Snowy) speed *= 0.6; // 雪天 -40%
+            if (weather == Weather::Rainy) speed *= 0.8; 
+            if (weather == Weather::Snowy) speed *= 0.6; 
             break;
         case TransportMode::Run:
             speed = Config::SPEED_RUN;
-            if (weather != Weather::Sunny) speed *= 0.7; // 恶劣天气跑步大打折扣
+            if (weather != Weather::Sunny) speed *= 0.7; 
             break;
         case TransportMode::SharedBike:
-            // 雪天物理禁止骑行，返回极小值防止除零，逻辑层会处理无穷大权重
             if (weather == Weather::Snowy) return 0.0001; 
             speed = Config::SPEED_SHARED_BIKE;
             break;
@@ -349,60 +381,33 @@ double GraphModel::getRealSpeed(TransportMode mode, Weather weather) const {
 
 double GraphModel::getEdgeWeight(const Edge& edge, WeightMode weightMode, 
                                TransportMode transportMode, Weather weather) const {
-    
-    // === 1. 通行性检查 (Accessibility) ===
     bool isVehicle = (transportMode == TransportMode::SharedBike || 
                       transportMode == TransportMode::EBike);
     
-    // [规则] 雪天禁用自行车/电瓶车
-    if (weather == Weather::Snowy && isVehicle) {
-        return std::numeric_limits<double>::max();
-    }
-
-    // [规则] 车辆不可走楼梯或室内
-    if (isVehicle && (edge.type == EdgeType::Stairs || edge.type == EdgeType::Indoor)) {
-        return std::numeric_limits<double>::max();
-    }
-
-    // === 2. 基础属性 ===
+    if (weather == Weather::Snowy && isVehicle) return std::numeric_limits<double>::max();
+    if (isVehicle && (edge.type == EdgeType::Stairs || edge.type == EdgeType::Indoor)) return std::numeric_limits<double>::max();
     if (weightMode == WeightMode::DISTANCE) return edge.distance;
 
-    // === 3. 时间计算 (核心物理引擎) ===
     double speed = getRealSpeed(transportMode, weather);
-    
-    // [规则] 坡度逻辑 (Slope Physics)
-    // 只要有坡度且超过阈值，就进行减速
     if (std::abs(edge.slope) > Config::SLOPE_THRESHOLD) {
-        if (transportMode == TransportMode::SharedBike) speed *= 0.3; // 骑车上坡极慢
-        else if (transportMode == TransportMode::Walk) speed *= 0.8;  // 走路微慢
-        else if (transportMode == TransportMode::Run) speed *= 0.6;   // 跑步上坡很累
-        // 电驴动力强，这里设定为不减速
+        if (transportMode == TransportMode::SharedBike) speed *= 0.3; 
+        else if (transportMode == TransportMode::Walk) speed *= 0.8;  
+        else if (transportMode == TransportMode::Run) speed *= 0.6;   
     }
 
-    // [规则] 雨天骑行安全惩罚 (PRD: 权重 x1.5，模拟小心翼翼)
     double penaltyMultiplier = 1.0;
-    if (weather == Weather::Rainy && isVehicle) {
-        penaltyMultiplier = 1.5;
-    }
+    if (weather == Weather::Rainy && isVehicle) penaltyMultiplier = 1.5;
 
     double time = (edge.distance / speed) * penaltyMultiplier;
-
     if (weightMode == WeightMode::TIME) return time;
 
-    // === 4. 心理代价 (Cost / 懒人指数) ===
     if (weightMode == WeightMode::COST) {
         double cost = edge.distance;
-        
-        // 懒人核心：极度排斥上坡和楼梯
-        if (std::abs(edge.slope) > Config::SLOPE_THRESHOLD) cost *= 20.0; // 极度厌恶上坡
-        if (edge.type == EdgeType::Stairs) cost *= 10.0; // 厌恶楼梯
-        
-        // 雪天走楼梯极其危险
+        if (std::abs(edge.slope) > Config::SLOPE_THRESHOLD) cost *= 20.0; 
+        if (edge.type == EdgeType::Stairs) cost *= 10.0; 
         if (weather == Weather::Snowy && edge.type == EdgeType::Stairs) cost *= 100.0;
-
         return cost;
     }
-
     return edge.distance;
 }
 
@@ -411,13 +416,9 @@ QVector<int> GraphModel::findPath(int startId, int endId, TransportMode mode, We
 
     QMap<int, double> dist;
     QMap<int, int> parent;
-    
     for(int id : nodesMap.keys()) dist[id] = std::numeric_limits<double>::max();
     
-    WeightMode obj = WeightMode::TIME; 
-    
     std::priority_queue<std::pair<double, int>, std::vector<std::pair<double, int>>, std::greater<>> pq;
-
     dist[startId] = 0;
     pq.push({0, startId});
 
@@ -425,18 +426,13 @@ QVector<int> GraphModel::findPath(int startId, int endId, TransportMode mode, We
         double d = pq.top().first;
         int u = pq.top().second;
         pq.pop();
-
         if (d > dist[u]) continue;
         if (u == endId) break;
-
         if (!adj.contains(u)) continue;
 
         for (const Edge& e : adj[u]) {
-            // [关键] 传入 weather 和 mode
-            double weight = getEdgeWeight(e, obj, mode, weather);
-            
+            double weight = getEdgeWeight(e, WeightMode::TIME, mode, weather);
             if (weight >= std::numeric_limits<double>::max()) continue;
-
             if (dist[u] + weight < dist[e.v]) {
                 dist[e.v] = dist[u] + weight;
                 parent[e.v] = u;
@@ -447,7 +443,6 @@ QVector<int> GraphModel::findPath(int startId, int endId, TransportMode mode, We
 
     QVector<int> path;
     if (dist[endId] == std::numeric_limits<double>::max()) return path;
-
     int curr = endId;
     while (curr != startId) {
         path.append(curr);
@@ -456,6 +451,71 @@ QVector<int> GraphModel::findPath(int startId, int endId, TransportMode mode, We
     path.append(startId);
     std::reverse(path.begin(), path.end());
     return path;
+}
+
+// 校车逻辑
+QTime GraphModel::getNextBusTime(int stationId, QTime arrivalTime, Weather weather) const {
+    if (!stationSchedules.contains(stationId)) return QTime();
+    int delayMinutes = 0;
+    if (weather == Weather::Rainy) delayMinutes = 5;
+    if (weather == Weather::Snowy) delayMinutes = 15;
+
+    const QVector<QTime>& rawTimes = stationSchedules[stationId];
+    for (const QTime& rawT : rawTimes) {
+        QTime effectiveT = rawT.addSecs(delayMinutes * 60);
+        if (effectiveT >= arrivalTime) return effectiveT;
+    }
+    return QTime();
+}
+
+GraphModel::BusRouteResult GraphModel::calculateBestBusRoute(int startId, int endId, QTime currentTime, Weather weather) {
+    BusRouteResult bestResult;
+    bestResult.valid = false;
+    bestResult.totalDuration = std::numeric_limits<double>::max();
+
+    QVector<int> stations;
+    for (auto it = nodesMap.begin(); it != nodesMap.end(); ++it) {
+        if (it.value().category == NodeCategory::BusStation) stations.append(it.key());
+    }
+    if (stations.isEmpty()) return bestResult;
+
+    for (int startStation : stations) {
+        QVector<int> walk1Path = findPath(startId, startStation, TransportMode::Walk, weather);
+        if (walk1Path.isEmpty()) continue;
+        double walk1Time = calculateDuration(walk1Path, TransportMode::Walk, weather);
+        QTime arrivalAtStation = currentTime.addSecs((int)walk1Time);
+        QTime busTime = getNextBusTime(startStation, arrivalAtStation, weather);
+        if (!busTime.isValid()) continue;
+
+        double waitTime = arrivalAtStation.secsTo(busTime);
+
+        for (int endStation : stations) {
+            if (startStation == endStation) continue;
+            QVector<int> ridePath = findPath(startStation, endStation, TransportMode::Bus, weather);
+            if (ridePath.isEmpty()) continue;
+            double rideTime = calculateDuration(ridePath, TransportMode::Bus, weather);
+            QVector<int> walk2Path = findPath(endStation, endId, TransportMode::Walk, weather);
+            if (walk2Path.isEmpty()) continue;
+            double walk2Time = calculateDuration(walk2Path, TransportMode::Walk, weather);
+
+            double total = walk1Time + waitTime + rideTime + walk2Time;
+            if (total < bestResult.totalDuration) {
+                bestResult.valid = true;
+                bestResult.totalDuration = total;
+                bestResult.stationStartId = startStation;
+                bestResult.stationEndId = endStation;
+                bestResult.nextBusTime = busTime;
+                bestResult.fullPath = walk1Path;
+                if (!ridePath.isEmpty()) {
+                    for (int k = 1; k < ridePath.size(); ++k) bestResult.fullPath.append(ridePath[k]);
+                }
+                if (!walk2Path.isEmpty()) {
+                    for (int k = 1; k < walk2Path.size(); ++k) bestResult.fullPath.append(walk2Path[k]);
+                }
+            }
+        }
+    }
+    return bestResult;
 }
 
 bool GraphModel::isLate(double durationSeconds, QTime current, QTime target) const {
@@ -468,60 +528,37 @@ PathRecommendation GraphModel::getSpecificRoute(int startId, int endId,
                                               Weather weather, 
                                               QTime currentTime, 
                                               QTime classTime,
-                                              bool enableLateCheck) { // <--- 新增参数
-    // 1. 基础寻路
+                                              bool enableLateCheck) {
+    if (mode == TransportMode::Bus) {
+        BusRouteResult busRes = calculateBestBusRoute(startId, endId, currentTime, weather);
+        if (!busRes.valid) return PathRecommendation();
+        
+        bool late = enableLateCheck && isLate(busRes.totalDuration, currentTime, classTime);
+        double dist = calculateDistance(busRes.fullPath);
+        return PathRecommendation(RouteType::FASTEST, "校车通勤", 
+            QString("班次 %1").arg(busRes.nextBusTime.toString("HH:mm")), 
+            busRes.fullPath, dist, busRes.totalDuration, 0, late);
+    }
+
     QVector<int> path = findPath(startId, endId, mode, weather);
-    
-    // 如果无路可走
-    if (path.isEmpty()) return PathRecommendation(); 
+    if (path.isEmpty()) return PathRecommendation();
 
-    // 2. 计算基础数据
     double dist = calculateDistance(path);
-    double pureTime = calculateDuration(path, mode, weather);
-    double totalTime = pureTime;
-    
-    // 3. 应用模式特定的逻辑 (Context Logic)
-    QString typeName;
-    QString label;
-    RouteType rType = RouteType::FASTEST;
+    double totalTime = calculateDuration(path, mode, weather);
+    if (mode == TransportMode::SharedBike) totalTime += Config::TIME_FIND_BIKE + Config::TIME_PARK_BIKE;
 
+    QString typeName = "普通模式";
+    QString label = "推荐";
     switch (mode) {
-    case TransportMode::Walk:
-        typeName = "步行";
-        label = "稳健保底";
-        rType = RouteType::SHORTEST;
-        break;
-
-    case TransportMode::SharedBike:
-        typeName = "共享单车";
-        label = "随停随取";
-        // 加上找车和还车时间
-        totalTime += Config::TIME_FIND_BIKE + Config::TIME_PARK_BIKE;
-        break;
-
-    case TransportMode::EBike:
-        typeName = "私人电驴";
-        label = "速度王者";
-        break;
-
-    case TransportMode::Run:
-        typeName = "极限狂奔";
-        label = "可能会累";
-        break;
-
-    case TransportMode::Bus:
-        typeName = "校车";
-        label = "定时班车";
-        break;
+        case TransportMode::Walk: typeName = "步行"; label = "稳健保底"; break;
+        case TransportMode::SharedBike: typeName = "共享单车"; label = "随停随取"; break;
+        case TransportMode::EBike: typeName = "私人电驴"; label = "速度王者"; break;
+        case TransportMode::Run: typeName = "极限狂奔"; label = "可能会累"; break;
+        default: break;
     }
 
-    // 4. [核心修改] 迟到判定：只有当开关开启时才计算
-    bool late = false;
-    if (enableLateCheck) {
-        late = isLate(totalTime, currentTime, classTime);
-    }
-
-    return PathRecommendation(rType, typeName, label, path, dist, totalTime, 0, late);
+    bool late = enableLateCheck && isLate(totalTime, currentTime, classTime);
+    return PathRecommendation(RouteType::FASTEST, typeName, label, path, dist, totalTime, 0, late);
 }
 
 double GraphModel::calculateDuration(const QVector<int>& pathNodeIds, TransportMode mode, Weather weather) const {

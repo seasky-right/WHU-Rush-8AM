@@ -14,6 +14,7 @@
 #include <QtCore/QVariantAnimation>
 #include <QtCore/QPropertyAnimation>
 #include "../GraphData.h"
+#include "WeatherOverlay.h" // 确保这一行在，用于天气系统
 
 enum class EditMode {
     None,           
@@ -33,6 +34,9 @@ public:
     void setEditMode(EditMode mode);
     EditMode getEditMode() const { return currentMode; }
 
+    // 【新增】天气设置接口
+    void setWeather(Weather weatherType);
+
     void clearEditTempItems();
     void addEditVisualNode(int id, const QString& name, const QPointF& pos, int type);
 
@@ -40,40 +44,55 @@ public:
     void clearPathHighlight();
     void setActiveEdge(int u, int v);
 
+    // 暂停/恢复动画
+    void pauseHoverAnimations();
+    void resumeHoverAnimations();
+
 signals:
-    void nodeClicked(int nodeId, QString name, bool isLeftClick); 
+    // 导航模式信号
+    void nodeClicked(int nodeId, QString name, bool isLeftClick);
+
+    // 编辑模式信号
     void nodeEditClicked(int nodeId, bool isCtrlPressed);
     void emptySpaceClicked(double x, double y);
     void edgeConnectionRequested(int idA, int idB);
-    void nodeMoved(int id, double newX, double newY);
-    void undoRequested(); 
+    void nodeMoved(int id, double x, double y);
+    void undoRequested();
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
-    void resizeEvent(QResizeEvent *event) override; 
-    void leaveEvent(QEvent *event) override;        
+    void resizeEvent(QResizeEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private slots:
-    void onAnimationTick();      
-    void resumeHoverAnimations(); 
+    void onAnimationTick();
 
 private:
     QGraphicsScene* scene;
     QGraphicsPixmapItem* backgroundItem = nullptr;
-    
+    QString m_bgPath; 
+
+    // 【新增】天气层指针
+    WeatherOverlay* weatherOverlay = nullptr;
+    Weather m_currentWeatherState = Weather::Sunny;
+
     QVector<Node> cachedNodes;
     QVector<Edge> cachedEdges;
-    QMap<int, QGraphicsTextItem*> nodeLabelItems;
     
+    // --- 查找辅助 ---
+    int findNodeAt(const QPointF& pos);
+    int findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV);
+    QPen edgePenForType(EdgeType type) const;
+
+    // --- 状态 ---
     EditMode currentMode = EditMode::None;
-    
-    bool isMiddlePanning = false;
-    QPoint lastPanPos;
     bool isNodeDragging = false;
     int draggingNodeId = -1;
+    bool isMiddlePanning = false;
+    QPoint lastPanPos;
     QPointF lastScenePos;
     
     int connectFirstNodeId = -1;
@@ -86,13 +105,15 @@ private:
     int hoveredNodeId = -1;
     int hoveredEdgeIndex = -1;
     
-    // 【新增】气泡自适应缩放比例
     double currentBubbleScale = 1.0;
 
     QVector<QGraphicsItem*> hoverItems;
     QVector<QGraphicsItem*> dyingItems; 
     
+    // 【修复】之前漏掉了这个变量，导致 nodeLabelItems 报错
+    QMap<int, QGraphicsTextItem*> nodeLabelItems; 
     QVector<int> hiddenLabelNodeIds;
+
     QVector<QPointer<QAbstractAnimation>> hoverAnims;
     QTimer* hoverResumeTimer = nullptr;
     quint64 hoverUidCounter = 1;
@@ -105,7 +126,7 @@ private:
     void showNodeHoverBubble(const Node& node);
     void showEdgeHoverBubble(const Edge& edge, const QPointF& closestPoint);
     void startHoverAppearAnimation();
-    void pauseHoverAnimations();
+    
     QColor withAlpha(const QColor& c, int alpha);
     
     // --- 路径动画 ---
@@ -113,13 +134,9 @@ private:
     double animationProgress = 0.0;
     double animationDurationMs = 1000.0;
     qint64 animationStartTime = 0;
-    QTimer* animationTimer = nullptr;
+    QTimer* animationTimer;
     QGraphicsPathItem* activeTrackItem = nullptr;
     QGraphicsPathItem* activeGrowthItem = nullptr;
     
     void drawPathGrowthAnimation();
-
-    int findNodeAt(const QPointF& pos);
-    int findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV); 
-    QPen edgePenForType(EdgeType type) const;
 };
