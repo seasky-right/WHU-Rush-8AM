@@ -3,59 +3,71 @@
 #include <QtCore/QCoreApplication>
 #include <cmath>
 
+// ============================================================
+// 地图编辑器窗口构造函数
+// ============================================================
 EditorWindow::EditorWindow(GraphModel* sharedModel, QWidget *parent)
     : QMainWindow(parent), model(sharedModel)
 {
+    // 设置窗口标题和大小
     this->setWindowTitle("地图编辑器 - 极速模式");
     this->resize(1200, 800);
 
-    // 独立的 MapWidget，专用于编辑
+    // 创建独立的地图组件，专用于编辑
     mapWidget = new MapWidget(this);
 
-    // 开启编辑权限，允许拖拽
+    // 开启编辑功能：允许拖拽节点
     mapWidget->setEditable(true);
     
-    // 编辑器显示所有节点（包括幽灵节点）和所有路线
-    mapWidget->setShowGhostNodes(true);
-    mapWidget->setShowEdges(true);         // 显示所有路线
-    mapWidget->setNodeSizeMultiplier(1.0); // 正常大小
+    // 显示所有节点和路线
+    mapWidget->setShowGhostNodes(true);  // 包括幽灵节点
+    mapWidget->setShowEdges(true);       // 显示所有边
+    mapWidget->setNodeSizeMultiplier(1.0); // 节点正常大小
     
+    // 设置背景地图
     QString appDir = QCoreApplication::applicationDirPath();
     mapWidget->setBackgroundImage(appDir + "/Data/map.png");
     
-    // 初始化 UI
+    // 创建界面UI
     setupUi();
 
     // =========================================================
-    // 信号连接 (Crash 修复关键区)
+    // 信号连接（关键区：防止Crash）
     // =========================================================
     
-    // 1. 点击节点 -> 显示属性
+    // 1. 点击节点 -> 显示属性面板
     connect(mapWidget, &MapWidget::nodeEditClicked, this, &EditorWindow::onNodeEditClicked);
     
-    // 2. 点击空白 -> 新建 (使用 QueuedConnection 防止在事件处理中删除对象)
+    // 2. 点击空白 -> 新建节点
+    // 使用QueuedConnection防止在事件处理中删除对象
     connect(mapWidget, &MapWidget::emptySpaceClicked, this, &EditorWindow::onEmptySpaceClicked, Qt::QueuedConnection);
     
-    // 3. 连线请求 -> 自动连接 
-    // 【关键修复】必须加 Qt::QueuedConnection！
-    // 否则点击的一瞬间，MapWidget 的 item 被 delete，导致 Crash。
+    // 3. 连线请求 -> 自动连接两个节点
+    // 关键修复：必须加Qt::QueuedConnection！
+    // 否则点击的一瞬间MapWidget的item被删除，导致Crash
     connect(mapWidget, &MapWidget::edgeConnectionRequested, this, &EditorWindow::onEdgeConnectionRequested, Qt::QueuedConnection);
     
-    // 4. 拖拽节点 -> 移动并保存 (已有 QueuedConnection)
+    // 4. 拖拽节点 -> 移动并保存
     connect(mapWidget, &MapWidget::nodeMoved, this, &EditorWindow::onNodeMoved, Qt::QueuedConnection);
     
-    // 5. 撤销 (已有 QueuedConnection)
+    // 5. 撤销操作
     connect(mapWidget, &MapWidget::undoRequested, this, &EditorWindow::onUndoRequested, Qt::QueuedConnection);
 
-    // 初始刷新
+    // 初始化地图显示
     refreshMap();
     
     // 默认进入浏览模式
     mapWidget->setEditMode(EditMode::None);
 }
 
-void EditorWindow::refreshMap() {
-    if (model && mapWidget) {
+// ============================================================
+// 刷新地图显示
+// 从模型中加载最新的节点和边数据
+// ============================================================
+void EditorWindow::refreshMap()
+{
+    if (model && mapWidget)
+    {
         mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
     }
 }
@@ -280,33 +292,82 @@ void EditorWindow::onLiveEdgePropChanged() {
     statusLabel->setText("道路属性已更新");
 }
 
-void EditorWindow::onModeChanged(int id) {
+// ============================================================
+// 切换编辑模式
+// 0=浏览 1=连线 2=新建建筑 3=新建路口
+// ============================================================
+void EditorWindow::onModeChanged(int id)
+{
+    // 清除当前选中的边
     mapWidget->setActiveEdge(-1, -1);
-    currentNodeId = -1; 
-    EditMode m = EditMode::None;
-    if (id == 1) m = EditMode::ConnectEdge;
-    else if (id == 2) m = EditMode::AddBuilding;
-    else if (id == 3) m = EditMode::AddGhost;
+    currentNodeId = -1;
     
-    mapWidget->setEditMode(m);
+    // 根据按铞ID决定模式
+    EditMode newMode = EditMode::None;
+    if (id == 1)
+    {
+        newMode = EditMode::ConnectEdge;  // 连线模式
+    }
+    else if (id == 2)
+    {
+        newMode = EditMode::AddBuilding;  // 添加建筑
+    }
+    else if (id == 3)
+    {
+        newMode = EditMode::AddGhost;     // 添加幽灵节点
+    }
+    
+    // 应用新模式
+    mapWidget->setEditMode(newMode);
+    
+    // 切换到空白面板
     rightPanelStack->setCurrentWidget(emptyPanel);
+    
     statusLabel->setText("模式切换");
 }
 
-void EditorWindow::onNodeEditClicked(int nodeId, bool) {
+// ============================================================
+// 点击节点：显示节点属性面板
+// ============================================================
+void EditorWindow::onNodeEditClicked(int nodeId, bool)
+{
     mapWidget->setActiveEdge(-1, -1);
     showNodeProperty(nodeId);
 }
 
-void EditorWindow::onEmptySpaceClicked(double x, double y) {
+// ============================================================
+// 点击地图空白处：根据模式创建新节点
+// ============================================================
+void EditorWindow::onEmptySpaceClicked(double x, double y)
+{
+    // 清除边选中状态
     mapWidget->setActiveEdge(-1, -1);
-    EditMode m = mapWidget->getEditMode();
     
-    if (m == EditMode::AddBuilding || m == EditMode::AddGhost) {
-        NodeType type = (m == EditMode::AddBuilding) ? NodeType::Visible : NodeType::Ghost;
-        int id = model->addNode(x, y, type); 
+    // 检查当前编辑模式
+    EditMode currentMode = mapWidget->getEditMode();
+    
+    // 如果是添加建筑或路口模式
+    bool isAddBuilding = (currentMode == EditMode::AddBuilding);
+    bool isAddGhost = (currentMode == EditMode::AddGhost);
+    
+    if (isAddBuilding || isAddGhost)
+    {
+        // 确定节点类型
+        NodeType nodeType = NodeType::Visible;
+        if (isAddGhost)
+        {
+            nodeType = NodeType::Ghost;
+        }
+        
+        // 调用模型添加节点
+        int newNodeId = model->addNode(x, y, nodeType);
+        
+        // 刷新地图显示
         refreshMap();
-        showNodeProperty(id);
+        
+        // 显示新节点的属性面板
+        showNodeProperty(newNodeId);
+        
         statusLabel->setText("新建并保存成功");
     }
 }

@@ -82,20 +82,29 @@ private:
 //  MapWidget 实现
 // =========================================================
 
+// ============================================================
+// 地图组件构造函数
+// 初始化场景、渲染设置、天气覆盖层等
+// ============================================================
 MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
 {
+    // 创建图形场景
     scene = new QGraphicsScene(this);
     this->setScene(scene);
     
+    // 开启抗锯齿渲染，使图形更平滑
     this->setRenderHint(QPainter::Antialiasing);
     this->setRenderHint(QPainter::SmoothPixmapTransform);
     this->setRenderHint(QPainter::TextAntialiasing);
     
+    // 设置背景颜色为浅灰色
     this->setBackgroundBrush(QBrush(QColor("#F5F5F7"))); 
     
+    // 开启鼠标追踪
     this->setMouseTracking(true);
     this->setDragMode(QGraphicsView::NoDrag);
     
+    // 自定义滚动条样式
     QString scrollStyle = 
         "QScrollBar:vertical { background: transparent; width: 8px; margin: 0px; }"
         "QScrollBar::handle:vertical { background: #C1C1C5; min-height: 20px; border-radius: 4px; }"
@@ -111,28 +120,40 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     this->verticalScrollBar()->setStyleSheet(scrollStyle);
     this->horizontalScrollBar()->setStyleSheet(scrollStyle);
     
+    // 创建动画定时器
     animationTimer = new QTimer(this);
     connect(animationTimer, &QTimer::timeout, this, &MapWidget::onAnimationTick);
 
+    // 创建悬停恢复定时器
     hoverResumeTimer = new QTimer(this);
     hoverResumeTimer->setSingleShot(true);
     connect(hoverResumeTimer, &QTimer::timeout, this, &MapWidget::resumeHoverAnimations);
 
-    auto updateWeatherPos = [this]() {
-        if (weatherOverlay) {
+    // 天气覆盖层位置更新函数
+    auto updateWeatherPos = [this]()
+    {
+        if (weatherOverlay)
+        {
+            // 获取视口左上角在场景中的位置
             QPointF sceneTopLeft = mapToScene(0, 0);
             weatherOverlay->setPos(sceneTopLeft);
-            if (viewport()) {
-                weatherOverlay->setOverlayRect(QRectF(0, 0, viewport()->width(), viewport()->height()));
+            
+            // 设置覆盖区域大小
+            if (viewport())
+            {
+                QRectF overlayRect(0, 0, viewport()->width(), viewport()->height());
+                weatherOverlay->setOverlayRect(overlayRect);
             }
         }
     };
+    
+    // 连接滚动条信号：滚动时更新天气层位置
     connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, updateWeatherPos);
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, updateWeatherPos);
 
-    // 创建天气覆盖层
+    // 创建天气效果覆盖层
     weatherOverlay = new WeatherOverlay();
-    weatherOverlay->setZValue(1000);
+    weatherOverlay->setZValue(1000);  // 最高层级
     scene->addItem(weatherOverlay);
 }
 

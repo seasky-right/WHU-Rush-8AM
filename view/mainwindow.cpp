@@ -121,44 +121,70 @@ const QString COMBO_STYLE =
     "    padding: 5px; "
     "}";
 
+// ============================================================
+// 主窗口构造函数
+// 初始化整个应用的UI和数据模型
+// ============================================================
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    // 设置窗口标题和大小
     this->setWindowTitle("WHU Morning Rush - 早八冲锋号");
     this->resize(1400, 900);
 
+    // 创建数据模型和地图组件
     model = new GraphModel();
     mapWidget = new MapWidget(this);
-    mapWidget->setEditMode(EditMode::None);
-    mapWidget->setShowEdges(false);       // 主界面不显示路线
-    mapWidget->setNodeSizeMultiplier(2.0); // 节点放大2倍
+    
+    // 配置地图显示模式
+    mapWidget->setEditMode(EditMode::None);  // 主界面不可编辑
+    mapWidget->setShowEdges(false);          // 不显示所有边
+    mapWidget->setNodeSizeMultiplier(2.0);   // 节点放大2倍
 
+    // 创建界面UI
     setupUi();
 
+    // 连接信号与槽
     connect(mapWidget, &MapWidget::nodeClicked, this, &MainWindow::onMapNodeClicked);
     connect(openEditorBtn, &QPushButton::clicked, this, &MainWindow::onOpenEditor);
 
+    // 获取应用程序所在目录
     QString appDir = QCoreApplication::applicationDirPath();
     
-    // 【修改】同时加载地图和时刻表
+    // 加载地图数据和校车时刻表
     bool mapLoaded = model->loadData(appDir + "/Data/nodes.txt", appDir + "/Data/edges.txt");
     bool scheduleLoaded = model->loadSchedule(appDir + "/Data/bus_schedule.csv");
 
-    if (mapLoaded) {
+    // 根据加载结果更新界面
+    if (mapLoaded)
+    {
+        // 在地图上绘制节点和边
         mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
+        
+        // 设置背景地图图片
         mapWidget->setBackgroundImage(appDir + "/Data/map.png");
         
-        if (scheduleLoaded) {
+        // 根据时刻表加载情况显示不同状态
+        if (scheduleLoaded)
+        {
             statusLabel->setText("地图与时刻表加载成功");
-        } else {
+        }
+        else
+        {
             statusLabel->setText("注意：校车时刻表加载失败");
         }
-    } else {
+    }
+    else
+    {
         statusLabel->setText("数据加载失败");
     }
 }
 
-MainWindow::~MainWindow() {
+// ============================================================
+// 析构函数
+// ============================================================
+MainWindow::~MainWindow()
+{
     delete model;
 }
 
@@ -708,106 +734,248 @@ void MainWindow::updateButtonStyle(QPushButton* btn, bool isSelected, bool isLat
     btn->setCursor(Qt::PointingHandCursor);
 }
 
-void MainWindow::onModeSearch(TransportMode mode) {
-    if (currentStartId == -1 || currentEndId == -1) {
+// ============================================================
+// 路径规划的核心函数
+// 根据用户选择的交通方式，调用多策略推荐算法
+// ============================================================
+void MainWindow::onModeSearch(TransportMode mode)
+{
+    // 检查是否已选择起点和终点
+    if (currentStartId == -1)
+    {
+        QMessageBox::warning(this, "提示", "请先在地图上选择起点和终点！");
+        return;
+    }
+    if (currentEndId == -1)
+    {
         QMessageBox::warning(this, "提示", "请先在地图上选择起点和终点！");
         return;
     }
 
-    Weather w = Weather::Sunny;
-    int idx = weatherCombo->currentIndex();
-    if (idx == 1) w = Weather::Rainy;
-    if (idx == 2) w = Weather::Snowy;
-    mapWidget->setWeather(w);
+    // 读取天气选择
+    Weather selectedWeather = Weather::Sunny;
+    int weatherIndex = weatherCombo->currentIndex();
+    if (weatherIndex == 1)
+    {
+        selectedWeather = Weather::Rainy;
+    }
+    if (weatherIndex == 2)
+    {
+        selectedWeather = Weather::Snowy;
+    }
+    
+    // 更新地图天气效果
+    mapWidget->setWeather(selectedWeather);
 
-    QTime curTime(spinCurrHour->value(), spinCurrMin->value());
-    QTime clsTime(spinClassHour->value(), spinClassMin->value());
+    // 读取当前时间和上课时间
+    QTime currentTime(spinCurrHour->value(), spinCurrMin->value());
+    QTime classTime(spinClassHour->value(), spinClassMin->value());
+    
+    // 读取是否检查迟到
     bool checkLate = lateCheckToggle->isChecked();
 
+    // 更新状态提示
     statusLabel->setText("正在规划多策略路线...");
     resetAllButtonStyles();
 
-    // [关键修改] 调用新的多策略接口，传入 currentWaypoints
+    // 调用核心算法：多策略路径推荐
+    // 会返回最多3种方案：极限冲刺、懒人养生、经济适用
     QVector<PathRecommendation> results = model->getMultiStrategyRoutes(
-        currentStartId, currentEndId, currentWaypoints, 
-        mode, w, curTime, clsTime, checkLate
+        currentStartId,
+        currentEndId,
+        currentWaypoints,
+        mode,
+        selectedWeather,
+        currentTime,
+        classTime,
+        checkLate
     );
 
-    // UI 反馈
-    QPushButton* currentBtn = nullptr;
-    if (mode == TransportMode::Walk) currentBtn = btnWalk;
-    else if (mode == TransportMode::SharedBike) currentBtn = btnBike;
-    else if (mode == TransportMode::EBike) currentBtn = btnEBike;
-    else if (mode == TransportMode::Run) currentBtn = btnRun;
-    else if (mode == TransportMode::Bus) currentBtn = btnBus;
-
-    if (currentBtn) {
-        bool anyLate = false;
-        // 如果所有推荐路线都迟到，按钮才变红
-        if (!results.isEmpty()) {
-            anyLate = true; 
-            for(auto& r : results) if(!r.isLate) anyLate = false;
-        }
-        updateButtonStyle(currentBtn, true, anyLate);
+    // 更新按钮样式：高亮当前交通方式
+    QPushButton* currentModeButton = nullptr;
+    if (mode == TransportMode::Walk)
+    {
+        currentModeButton = btnWalk;
+    }
+    else if (mode == TransportMode::SharedBike)
+    {
+        currentModeButton = btnBike;
+    }
+    else if (mode == TransportMode::EBike)
+    {
+        currentModeButton = btnEBike;
+    }
+    else if (mode == TransportMode::Run)
+    {
+        currentModeButton = btnRun;
+    }
+    else if (mode == TransportMode::Bus)
+    {
+        currentModeButton = btnBus;
     }
 
-    if (results.isEmpty()) {
+    // 判断是否所有路线都迟到（全红告警）
+    if (currentModeButton)
+    {
+        bool allRoutesLate = false;
+        if (!results.isEmpty())
+        {
+            allRoutesLate = true;
+            for (const auto& route : results)
+            {
+                if (!route.isLate)
+                {
+                    allRoutesLate = false;
+                    break;
+                }
+            }
+        }
+        
+        updateButtonStyle(currentModeButton, true, allRoutesLate);
+    }
+
+    // 根据结果更新状态
+    if (results.isEmpty())
+    {
         statusLabel->setText("无可行路线");
         QMessageBox::information(this, "提示", "无法找到路径。\n请检查是否被雪天/楼梯阻断，或节点不连通。");
-    } else {
-        statusLabel->setText(QString("规划完成，找到 %1 种方案").arg(results.size()));
+    }
+    else
+    {
+        QString message = QString("规划完成，找到 %1 种方案").arg(results.size());
+        statusLabel->setText(message);
     }
     
+    // 在右侧面板显示推荐路线
     displayRouteRecommendations(results);
 }
 
-void MainWindow::displayRouteRecommendations(const QVector<PathRecommendation>& recommendations) {
+// ============================================================
+// 显示路径推荐结果
+// 在右侧面板创建路线按钮，并高亮第一条路线
+// ============================================================
+void MainWindow::displayRouteRecommendations(const QVector<PathRecommendation>& recommendations)
+{
+    // 清空之前的推荐结果
     clearRoutePanel();
+    
+    // 保存当前推荐列表
     currentRecommendations = recommendations;
-    for (int i = 0; i < recommendations.size(); ++i) {
-        RouteButton* btn = new RouteButton(recommendations[i]);
-        routePanelLayout->addWidget(btn);
-        connect(btn, &QPushButton::clicked, this, [this, i]() { onRouteButtonClicked(i); });
-        connect(btn, &RouteButton::routeHovered, this, &MainWindow::onRouteHovered);
-        connect(btn, &RouteButton::routeUnhovered, this, &MainWindow::onRouteUnhovered);
+    
+    // 为每条推荐路线创建一个按钮
+    for (int i = 0; i < recommendations.size(); ++i)
+    {
+        // 创建路线按钮组件
+        RouteButton* routeBtn = new RouteButton(recommendations[i]);
+        routePanelLayout->addWidget(routeBtn);
+        
+        // 连接点击事件：选中这条路线
+        connect(routeBtn, &QPushButton::clicked, this, [this, i]() {
+            onRouteButtonClicked(i);
+        });
+        
+        // 连接悬停事件：预览路线
+        connect(routeBtn, &RouteButton::routeHovered, this, &MainWindow::onRouteHovered);
+        connect(routeBtn, &RouteButton::routeUnhovered, this, &MainWindow::onRouteUnhovered);
     }
-    if (!recommendations.isEmpty()) {
+    
+    // 默认高亮显示第一条推荐路线
+    if (!recommendations.isEmpty())
+    {
         mapWidget->highlightPath(recommendations[0].pathNodeIds, 1.0);
-    } else {
+    }
+    else
+    {
         mapWidget->clearPathHighlight();
     }
 }
 
-void MainWindow::clearRoutePanel() {
+// ============================================================
+// 清空路线推荐面板
+// ============================================================
+void MainWindow::clearRoutePanel()
+{
     QLayoutItem* item;
-    while ((item = routePanelLayout->takeAt(0)) != nullptr) {
-        delete item->widget(); delete item;
+    
+    // 逐个取出布局中的组件并删除
+    while ((item = routePanelLayout->takeAt(0)) != nullptr)
+    {
+        delete item->widget();
+        delete item;
     }
+    
     routeButtons.clear();
 }
 
-void MainWindow::onRouteButtonClicked(int routeIndex) {
-    if (routeIndex >= 0 && routeIndex < currentRecommendations.size()) {
-        const auto& rec = currentRecommendations[routeIndex];
-        mapWidget->highlightPath(rec.pathNodeIds, 1.0);
-        statusLabel->setText("已选择: " + rec.typeName);
+// ============================================================
+// 用户点击某条路线按钮
+// ============================================================
+void MainWindow::onRouteButtonClicked(int routeIndex)
+{
+    // 检查索引是否有效
+    if (routeIndex < 0)
+    {
+        return;
     }
-}
-void MainWindow::onRouteHovered(const PathRecommendation& recommendation) {
-    mapWidget->highlightPath(recommendation.pathNodeIds, 0.8);
-}
-void MainWindow::onRouteUnhovered() { 
+    if (routeIndex >= currentRecommendations.size())
+    {
+        return;
+    }
+    
+    // 获取选中的路线
+    const auto& selectedRoute = currentRecommendations[routeIndex];
+    
+    // 在地图上完全高亮这条路线
+    mapWidget->highlightPath(selectedRoute.pathNodeIds, 1.0);
+    
+    // 更新状态栏
+    statusLabel->setText("已选择: " + selectedRoute.typeName);
 }
 
-void MainWindow::onOpenEditor() {
+// ============================================================
+// 鼠标悬停在路线按钮上
+// ============================================================
+void MainWindow::onRouteHovered(const PathRecommendation& recommendation)
+{
+    // 半透明预览这条路线
+    mapWidget->highlightPath(recommendation.pathNodeIds, 0.8);
+}
+
+// ============================================================
+// 鼠标离开路线按钮
+// ============================================================
+void MainWindow::onRouteUnhovered()
+{
+    // 可以在这里恢复之前选中的路线显示
+}
+
+// ============================================================
+// 打开地图编辑器
+// ============================================================
+void MainWindow::onOpenEditor()
+{
+    // 创建编辑器窗口
     EditorWindow* editor = new EditorWindow(this->model, this);
+    
+    // 连接数据变更信号：编辑器修改地图后通知主窗口更新
     connect(editor, &EditorWindow::dataChanged, this, &MainWindow::onMapDataChanged);
-    editor->setWindowModality(Qt::WindowModal); 
+    
+    // 设置为模态窗口：打开编辑器时主窗口暂停交互
+    editor->setWindowModality(Qt::WindowModal);
+    
+    // 显示编辑器窗口
     editor->show();
 }
 
-void MainWindow::onMapDataChanged() {
+// ============================================================
+// 地图数据被编辑器修改后的回调
+// ============================================================
+void MainWindow::onMapDataChanged()
+{
+    // 重新绘制地图
     mapWidget->drawMap(model->getAllNodes(), model->getAllEdges());
+    
+    // 更新状态提示
     statusLabel->setText("地图数据已更新");
 }
 
