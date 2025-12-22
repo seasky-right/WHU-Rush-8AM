@@ -39,6 +39,8 @@ public:
 
     void setWeather(Weather weatherType);
     void setShowGhostNodes(bool show);
+    void setShowEdges(bool show);              // 新增：控制是否显示边
+    void setNodeSizeMultiplier(double mult);   // 新增：节点大小倍数
 
     void clearEditTempItems();
     void addEditVisualNode(int id, const QString& name, const QPointF& pos, int type);
@@ -77,6 +79,8 @@ private:
     WeatherOverlay* weatherOverlay = nullptr;
     Weather m_currentWeatherState = Weather::Sunny;
     bool m_showGhostNodes = false; 
+    bool m_showEdges = true;           // 新增：是否显示边
+    double m_nodeSizeMultiplier = 1.0; // 新增：节点大小倍数
 
     bool m_isEditable = false;
 

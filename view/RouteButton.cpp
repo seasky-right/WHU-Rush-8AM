@@ -12,7 +12,7 @@ RouteButton::RouteButton(const PathRecommendation& rec, QWidget *parent)
     // 显示更丰富的信息
     QString text = recommendation.getDisplayText();
     if (recommendation.isLate) {
-        text += "\n(⚠️ 预计迟到)";
+        text += "\n⚠️ 预计迟到";
     }
     setText(text);
     
@@ -21,7 +21,7 @@ RouteButton::RouteButton(const PathRecommendation& rec, QWidget *parent)
     
     // 统一尺寸策略：宽度填满，固定高度
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    setMinimumHeight(60); // 增加高度以容纳可能的警告文字
+    setMinimumHeight(65);
 }
 
 void RouteButton::enterEvent(QEnterEvent *event)
@@ -40,42 +40,47 @@ void RouteButton::leaveEvent(QEvent *event)
 
 void RouteButton::updateStyle(bool isHovered)
 {
-    QString baseColor = "#F0F0F0";
-    QString hoverColor = "#F8C3CD"; // 樱花粉
-    QString borderColor = "#D0D0D0";
-    QString textColor = "#2C3E50";
+    QString baseColor = "#FFFFFF";
+    QString hoverColor = "#F0F0F2";
+    QString borderColor = "transparent";
+    QString textColor = "#1C1C1E";
 
-    // [新增] 迟到颜色逻辑
+    // 迟到颜色逻辑
     if (recommendation.isLate) {
-        baseColor = "#FFEBEE";  // 浅红背景 (System Red Light)
-        hoverColor = "#FFCDD2"; // 悬停深红
-        borderColor = "#E57373"; // 红色边框
-        textColor = "#C62828";   // 红色文字
+        baseColor = "#FFF5F5";
+        hoverColor = "#FFEBEB";
+        borderColor = "#FFE0E0";
+        textColor = "#C62828";
     }
 
     if (isHovered) {
-        // 悬停时的样式
+        // 悬停时的样式 - iOS风格卡片
         QString style = QString(
             "RouteButton { "
             "    background-color: %1; "  
             "    color: %2; "              
-            "    font-weight: bold; "
-            "    border: 2px solid %3; "   
-            "    border-radius: 5px; "
-            "    padding: 8px; "
+            "    font-weight: 600; "
+            "    font-size: 12px; "
+            "    border: none; "   
+            "    border-radius: 12px; "
+            "    padding: 10px 12px; "
+            "    text-align: left; "
             "} "
-        ).arg(hoverColor).arg(textColor).arg(recommendation.isLate ? "#D32F2F" : "#E91E63");
+        ).arg(hoverColor).arg(textColor);
         
         setStyleSheet(style);
     } else {
-        // 正常样式
+        // 正常样式 - iOS风格卡片
         QString style = QString(
             "RouteButton { "
             "    background-color: %1; "
             "    color: %2; "
+            "    font-weight: 500; "
+            "    font-size: 12px; "
             "    border: 1px solid %3; "
-            "    border-radius: 5px; "
-            "    padding: 8px; "
+            "    border-radius: 12px; "
+            "    padding: 10px 12px; "
+            "    text-align: left; "
             "} "
         ).arg(baseColor).arg(textColor).arg(borderColor);
         

@@ -15,7 +15,11 @@ EditorWindow::EditorWindow(GraphModel* sharedModel, QWidget *parent)
     // 开启编辑权限，允许拖拽
     mapWidget->setEditable(true);
     
+    // 编辑器显示所有节点（包括幽灵节点）和所有路线
     mapWidget->setShowGhostNodes(true);
+    mapWidget->setShowEdges(true);         // 显示所有路线
+    mapWidget->setNodeSizeMultiplier(1.0); // 正常大小
+    
     QString appDir = QCoreApplication::applicationDirPath();
     mapWidget->setBackgroundImage(appDir + "/Data/map.png");
     

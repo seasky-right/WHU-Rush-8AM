@@ -129,6 +129,11 @@ MapWidget::MapWidget(QWidget *parent) : QGraphicsView(parent)
     };
     connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, updateWeatherPos);
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, updateWeatherPos);
+
+    // 创建天气覆盖层
+    weatherOverlay = new WeatherOverlay();
+    weatherOverlay->setZValue(1000);
+    scene->addItem(weatherOverlay);
 }
 
 void MapWidget::setActiveEdge(int u, int v) {
@@ -145,6 +150,20 @@ void MapWidget::stopHoverAnimations() {
 void MapWidget::setShowGhostNodes(bool show) {
     if (m_showGhostNodes != show) {
         m_showGhostNodes = show;
+        drawMap(cachedNodes, cachedEdges);
+    }
+}
+
+void MapWidget::setShowEdges(bool show) {
+    if (m_showEdges != show) {
+        m_showEdges = show;
+        drawMap(cachedNodes, cachedEdges);
+    }
+}
+
+void MapWidget::setNodeSizeMultiplier(double mult) {
+    if (m_nodeSizeMultiplier != mult) {
+        m_nodeSizeMultiplier = mult;
         drawMap(cachedNodes, cachedEdges);
     }
 }
@@ -191,30 +210,32 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
     cachedNodes = nodes;
     cachedEdges = edges;
 
-    // 4. 重绘边 (Edge)
-    // 先画边，这样边会在节点下面
-    for(long long i=0; i<edges.size(); ++i) {
-        const Edge& e = edges[i];
-        
-        // 查找端点坐标
-        QPointF uPos, vPos;
-        bool uFound=false, vFound=false;
-        for(const auto& n : nodes) {
-            if(n.id == e.u) { uPos = QPointF(n.x, n.y); uFound=true; }
-            if(n.id == e.v) { vPos = QPointF(n.x, n.y); vFound=true; }
-            if(uFound && vFound) break;
-        }
-        if(!uFound || !vFound) continue;
+    // 4. 重绘边 (Edge) - 仅当 m_showEdges 为 true 时绘制
+    if (m_showEdges) {
+        // 先画边，这样边会在节点下面
+        for(long long i=0; i<edges.size(); ++i) {
+            const Edge& e = edges[i];
+            
+            // 查找端点坐标
+            QPointF uPos, vPos;
+            bool uFound=false, vFound=false;
+            for(const auto& n : nodes) {
+                if(n.id == e.u) { uPos = QPointF(n.x, n.y); uFound=true; }
+                if(n.id == e.v) { vPos = QPointF(n.x, n.y); vFound=true; }
+                if(uFound && vFound) break;
+            }
+            if(!uFound || !vFound) continue;
 
-        QGraphicsLineItem* lineItem = scene->addLine(QLineF(uPos, vPos), edgePenForType(e.type));
-        lineItem->setZValue(e.type == EdgeType::Stairs ? 6 : 5); 
-        
-        // 记录映射
-        long long key = makeEdgeKey(e.u, e.v);
-        edgeGraphicsItems.insert(key, lineItem);
-        
-        nodeConnectedEdgeKeys[e.u].append(key);
-        nodeConnectedEdgeKeys[e.v].append(key);
+            QGraphicsLineItem* lineItem = scene->addLine(QLineF(uPos, vPos), edgePenForType(e.type));
+            lineItem->setZValue(e.type == EdgeType::Stairs ? 6 : 5); 
+            
+            // 记录映射
+            long long key = makeEdgeKey(e.u, e.v);
+            edgeGraphicsItems.insert(key, lineItem);
+            
+            nodeConnectedEdgeKeys[e.u].append(key);
+            nodeConnectedEdgeKeys[e.v].append(key);
+        }
     }
 
     // 5. 重绘节点 (Node)
@@ -223,7 +244,9 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
         // 如果不显示幽灵节点且当前是 Ghost，则跳过
         if (!m_showGhostNodes && n.type == NodeType::Ghost) continue;
 
-        double r = (n.type == NodeType::Ghost) ? 8.0 : 12.0; 
+        // 节点大小：Ghost节点8px，Visible节点12px，乘以放大倍数
+        double baseR = (n.type == NodeType::Ghost) ? 8.0 : 12.0;
+        double r = baseR * m_nodeSizeMultiplier;
         
         // 节点圆圈
         QGraphicsEllipseItem* el = scene->addEllipse(-r/2, -r/2, r, r);
@@ -234,8 +257,9 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             el->setPen(QPen(Qt::NoPen));
             el->setBrush(QColor(0, 0, 0, 40)); 
         } else {
-            el->setPen(QPen(Qt::white, 2));
-            el->setBrush(QColor("#636366")); 
+            // POI节点使用浅灰色样式
+            el->setPen(QPen(Qt::white, 2.5 * m_nodeSizeMultiplier));
+            el->setBrush(QColor("#8E8E93")); // 浅灰色
         }
         
         nodeGraphicsItems.insert(n.id, el);
@@ -245,7 +269,7 @@ void MapWidget::drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges)
             QGraphicsTextItem* label = scene->addText(n.name, nameFont);
             QRectF bd = label->boundingRect();
             label->setPos(n.x - bd.width()/2.0, n.y + r/2.0 + 2.0);
-            label->setDefaultTextColor(Qt::black);
+            label->setDefaultTextColor(QColor("#1C1C1E"));
             label->setZValue(12);
             nodeLabelItems.insert(n.id, label);
             
@@ -632,21 +656,32 @@ void MapWidget::resizeEvent(QResizeEvent *event) {
 }
 void MapWidget::leaveEvent(QEvent *event) { Q_UNUSED(event); fadeOutHoverItems(); }
 
-int MapWidget::findNodeAt(const QPointF& pos) {
-    double threshold = 30.0; 
-    for(const auto& node : cachedNodes) {
-        bool isGhost = (node.type == NodeType::Ghost);
-        bool forceShow = (currentMode == EditMode::ConnectEdge || 
-                          currentMode == EditMode::AddBuilding || 
-                          currentMode == EditMode::AddGhost);
-                          
-        if (isGhost && !m_showGhostNodes && !forceShow) continue;
+int MapWidget::findNodeAt(const QPointF& pos) 
+{
+    double closestDist = std::numeric_limits<double>::max();
+    int bestId = -1;
 
-        double dx = pos.x() - node.x; 
-        double dy = pos.y() - node.y;
-        if (dx*dx + dy*dy < threshold*threshold) return node.id;
+    for(const auto& n : cachedNodes) {
+        // 1. 如果当前不显示幽灵节点，且该节点是幽灵节点，直接忽略，绝对点不到
+        if (!m_showGhostNodes && n.type == NodeType::Ghost) continue;
+
+        // 2. 计算距离
+        double dist = std::hypot(n.x - pos.x(), n.y - pos.y());
+
+        // 判定范围根据节点大小倍数调整
+        // 幽灵节点基准8px，建筑节点基准12px，乘以放大倍数
+        double baseThreshold = (n.type == NodeType::Ghost) ? 8.0 : 12.0;
+        double threshold = baseThreshold * m_nodeSizeMultiplier;
+
+        if (dist <= threshold) {
+            // 如果都在范围内，取最近的那个（防止重叠时点错）
+            if (dist < closestDist) {
+                closestDist = dist;
+                bestId = n.id;
+            }
+        }
     }
-    return -1;
+    return bestId;
 }
 
 int MapWidget::findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV) {
@@ -895,19 +930,19 @@ void MapWidget::updateNodeHighlight(int nodeId, bool highlight)
     QGraphicsEllipseItem* ellipse = dynamic_cast<QGraphicsEllipseItem*>(item);
     if (ellipse) {
         if (highlight) {
-            // 高亮样式：蓝色填充，白色加粗边框
+            // 高亮样式：绿色填充，白色加粗边框
             QPen p = ellipse->pen();
             p.setColor(Qt::white);
-            p.setWidth(4);
+            p.setWidth(4 * m_nodeSizeMultiplier);
             ellipse->setPen(p);
-            ellipse->setBrush(QColor("#007AFF")); 
+            ellipse->setBrush(QColor("#34C759")); // 高亮用绿色
             ellipse->setZValue(100); // 让高亮的点浮在最上面
         } else {
-            // 恢复普通样式 (灰色)
+            // 恢复普通样式 (浅灰色)
             QPen p(Qt::white);
-            p.setWidth(3);
+            p.setWidth(2.5 * m_nodeSizeMultiplier);
             ellipse->setPen(p);
-            ellipse->setBrush(QColor("#636366")); 
+            ellipse->setBrush(QColor("#8E8E93")); // 浅灰色
             ellipse->setZValue(10);
         }
     }
