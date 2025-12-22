@@ -11,6 +11,7 @@
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QSpinBox> // 替换 QTimeEdit
 #include <QtCore/QVector>
+#include <QtWidgets/QListWidget>
 #include "../model/GraphModel.h"
 #include "MapWidget.h"
 #include "RouteButton.h"
@@ -68,6 +69,11 @@ private:
 
     int currentStartId = -1;
     int currentEndId = -1;
+
+    // [新增] 途经点数据与控件
+    QVector<int> currentWaypoints;
+    QCheckBox* waypointCheck;
+    QListWidget* waypointList;
 
     void setupUi();
     void displayRouteRecommendations(const QVector<PathRecommendation>& recommendations);

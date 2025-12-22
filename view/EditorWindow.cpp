@@ -11,6 +11,11 @@ EditorWindow::EditorWindow(GraphModel* sharedModel, QWidget *parent)
 
     // 独立的 MapWidget，专用于编辑
     mapWidget = new MapWidget(this);
+
+    // 开启编辑权限，允许拖拽
+    mapWidget->setEditable(true);
+    
+    mapWidget->setShowGhostNodes(true);
     QString appDir = QCoreApplication::applicationDirPath();
     mapWidget->setBackgroundImage(appDir + "/Data/map.png");
     
@@ -18,22 +23,24 @@ EditorWindow::EditorWindow(GraphModel* sharedModel, QWidget *parent)
     setupUi();
 
     // =========================================================
-    // 信号连接
+    // 信号连接 (Crash 修复关键区)
     // =========================================================
     
     // 1. 点击节点 -> 显示属性
     connect(mapWidget, &MapWidget::nodeEditClicked, this, &EditorWindow::onNodeEditClicked);
     
-    // 2. 点击空白 -> 新建
+    // 2. 点击空白 -> 新建 (使用 QueuedConnection 防止在事件处理中删除对象)
     connect(mapWidget, &MapWidget::emptySpaceClicked, this, &EditorWindow::onEmptySpaceClicked, Qt::QueuedConnection);
     
-    // 3. 连线请求 -> 自动连接
-    connect(mapWidget, &MapWidget::edgeConnectionRequested, this, &EditorWindow::onEdgeConnectionRequested);
+    // 3. 连线请求 -> 自动连接 
+    // 【关键修复】必须加 Qt::QueuedConnection！
+    // 否则点击的一瞬间，MapWidget 的 item 被 delete，导致 Crash。
+    connect(mapWidget, &MapWidget::edgeConnectionRequested, this, &EditorWindow::onEdgeConnectionRequested, Qt::QueuedConnection);
     
-    // 4. 拖拽节点 -> 移动并保存
+    // 4. 拖拽节点 -> 移动并保存 (已有 QueuedConnection)
     connect(mapWidget, &MapWidget::nodeMoved, this, &EditorWindow::onNodeMoved, Qt::QueuedConnection);
     
-    // 5. 撤销
+    // 5. 撤销 (已有 QueuedConnection)
     connect(mapWidget, &MapWidget::undoRequested, this, &EditorWindow::onUndoRequested, Qt::QueuedConnection);
 
     // 初始刷新

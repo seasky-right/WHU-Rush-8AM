@@ -1,6 +1,13 @@
-#include "view/MainWindow.h"
+﻿#include "view/MainWindow.h"
 #include <QtWidgets/QApplication>
 
+/**
+ * @brief 应用程序入口点
+ * 
+ * @param argc 命令行参数数量
+ * @param argv 命令行参数数组
+ * @return int 应用程序退出代码
+ */
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);

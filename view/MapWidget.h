@@ -6,6 +6,7 @@
 #include <QtWidgets/QGraphicsLineItem>
 #include <QtWidgets/QGraphicsPathItem> 
 #include <QtWidgets/QGraphicsTextItem>
+#include <QtWidgets/QGraphicsEllipseItem> 
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
 #include <QtCore/QTimer>
@@ -14,7 +15,7 @@
 #include <QtCore/QVariantAnimation>
 #include <QtCore/QPropertyAnimation>
 #include "../GraphData.h"
-#include "WeatherOverlay.h" // 确保这一行在，用于天气系统
+#include "WeatherOverlay.h" 
 
 enum class EditMode {
     None,           
@@ -29,13 +30,15 @@ class MapWidget : public QGraphicsView
 public:
     explicit MapWidget(QWidget *parent = nullptr);
 
+    void setEditable(bool editable) { m_isEditable = editable; }
+
     void drawMap(const QVector<Node>& nodes, const QVector<Edge>& edges);
     void setBackgroundImage(const QString& path);
     void setEditMode(EditMode mode);
     EditMode getEditMode() const { return currentMode; }
 
-    // 【新增】天气设置接口
     void setWeather(Weather weatherType);
+    void setShowGhostNodes(bool show);
 
     void clearEditTempItems();
     void addEditVisualNode(int id, const QString& name, const QPointF& pos, int type);
@@ -44,15 +47,11 @@ public:
     void clearPathHighlight();
     void setActiveEdge(int u, int v);
 
-    // 暂停/恢复动画
     void pauseHoverAnimations();
     void resumeHoverAnimations();
 
 signals:
-    // 导航模式信号
     void nodeClicked(int nodeId, QString name, bool isLeftClick);
-
-    // 编辑模式信号
     void nodeEditClicked(int nodeId, bool isCtrlPressed);
     void emptySpaceClicked(double x, double y);
     void edgeConnectionRequested(int idA, int idB);
@@ -75,14 +74,15 @@ private:
     QGraphicsPixmapItem* backgroundItem = nullptr;
     QString m_bgPath; 
 
-    // 【新增】天气层指针
     WeatherOverlay* weatherOverlay = nullptr;
     Weather m_currentWeatherState = Weather::Sunny;
+    bool m_showGhostNodes = false; 
+
+    bool m_isEditable = false;
 
     QVector<Node> cachedNodes;
     QVector<Edge> cachedEdges;
     
-    // --- 查找辅助 ---
     int findNodeAt(const QPointF& pos);
     int findEdgeAt(const QPointF& pos, QPointF& closestPoint, int& outU, int& outV);
     QPen edgePenForType(EdgeType type) const;
@@ -101,19 +101,21 @@ private:
     int activeEdgeU = -1;
     int activeEdgeV = -1;
 
-    // --- 悬停气泡管理 ---
+    // --- 悬停与气泡 ---
     int hoveredNodeId = -1;
     int hoveredEdgeIndex = -1;
-    
     double currentBubbleScale = 1.0;
 
     QVector<QGraphicsItem*> hoverItems;
     QVector<QGraphicsItem*> dyingItems; 
     
-    // 【修复】之前漏掉了这个变量，导致 nodeLabelItems 报错
+    QMap<int, QGraphicsEllipseItem*> nodeGraphicsItems; 
     QMap<int, QGraphicsTextItem*> nodeLabelItems; 
-    QVector<int> hiddenLabelNodeIds;
+    QMap<long long, QGraphicsLineItem*> edgeGraphicsItems; 
+    
+    QMap<int, QVector<long long>> nodeConnectedEdgeKeys;
 
+    QVector<int> hiddenLabelNodeIds;
     QVector<QPointer<QAbstractAnimation>> hoverAnims;
     QTimer* hoverResumeTimer = nullptr;
     quint64 hoverUidCounter = 1;
@@ -128,6 +130,9 @@ private:
     void startHoverAppearAnimation();
     
     QColor withAlpha(const QColor& c, int alpha);
+
+    // === 【核心修改】新增的高亮函数声明 ===
+    void updateNodeHighlight(int nodeId, bool highlight);
     
     // --- 路径动画 ---
     QVector<int> currentPathNodeIds;

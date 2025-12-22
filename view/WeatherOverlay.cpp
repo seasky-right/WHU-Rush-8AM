@@ -161,10 +161,10 @@ void WeatherOverlay::paint(QPainter* painter, const QStyleOptionGraphicsItem* op
         // 晴天滤镜：白色，透明度30 (提亮地图)
         painter->fillRect(m_rect, QColor(255, 255, 255, 30)); 
     }
-    else {
+    /*else {
         // 雨雪滤镜：黑色，透明度80 (压暗地图，营造氛围)
-        painter->fillRect(m_rect, QColor(0, 0, 0, 80));
-    }
+        //painter->fillRect(m_rect, QColor(0, 0, 0, 80));
+    }*/
 
     if (m_currentType == OverlayType::Sunny) return;
 

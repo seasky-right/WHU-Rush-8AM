@@ -411,7 +411,7 @@ double GraphModel::getEdgeWeight(const Edge& edge, WeightMode weightMode,
     return edge.distance;
 }
 
-QVector<int> GraphModel::findPath(int startId, int endId, TransportMode mode, Weather weather) {
+QVector<int> GraphModel::findPath(int startId, int endId, TransportMode mode, Weather weather, WeightMode weightMode) {
     if (!nodesMap.contains(startId) || !nodesMap.contains(endId)) return {};
 
     QMap<int, double> dist;
@@ -431,7 +431,7 @@ QVector<int> GraphModel::findPath(int startId, int endId, TransportMode mode, We
         if (!adj.contains(u)) continue;
 
         for (const Edge& e : adj[u]) {
-            double weight = getEdgeWeight(e, WeightMode::TIME, mode, weather);
+            double weight = getEdgeWeight(e, weightMode, mode, weather);
             if (weight >= std::numeric_limits<double>::max()) continue;
             if (dist[u] + weight < dist[e.v]) {
                 dist[e.v] = dist[u] + weight;
@@ -523,42 +523,82 @@ bool GraphModel::isLate(double durationSeconds, QTime current, QTime target) con
     return arrival > target;
 }
 
-PathRecommendation GraphModel::getSpecificRoute(int startId, int endId, 
-                                              TransportMode mode,
-                                              Weather weather, 
-                                              QTime currentTime, 
-                                              QTime classTime,
-                                              bool enableLateCheck) {
+// 1. 辅助：多段路径拼接
+QVector<int> GraphModel::findMultiStagePath(int startId, int endId, const QVector<int>& waypoints, TransportMode mode, Weather weather, WeightMode weightMode) {
+    QVector<int> fullPath;
+    int currentStart = startId;
+    QVector<int> targets = waypoints;
+    targets.append(endId);
+
+    for (int target : targets) {
+        QVector<int> segment = findPath(currentStart, target, mode, weather, weightMode);
+        if (segment.isEmpty()) return {}; 
+        if (!fullPath.isEmpty()) segment.removeFirst(); // 避免重复节点
+        fullPath.append(segment);
+        currentStart = target;
+    }
+    return fullPath;
+}
+
+// 2. 核心：多策略推荐
+QVector<PathRecommendation> GraphModel::getMultiStrategyRoutes(
+    int startId, int endId, const QVector<int>& waypoints,
+    TransportMode mode, Weather weather, QTime currentTime, QTime classTime, bool enableLateCheck) 
+{
+    QVector<PathRecommendation> results;
+
+    // 校车特殊处理（暂不支持途经点，因为换乘逻辑复杂，这里做简化）
     if (mode == TransportMode::Bus) {
         BusRouteResult busRes = calculateBestBusRoute(startId, endId, currentTime, weather);
-        if (!busRes.valid) return PathRecommendation();
+        if (busRes.valid) {
+            bool late = enableLateCheck && isLate(busRes.totalDuration, currentTime, classTime);
+            double dist = calculateDistance(busRes.fullPath);
+            results.append(PathRecommendation(RouteType::FASTEST, "校车通勤", 
+                QString("班次 %1").arg(busRes.nextBusTime.toString("HH:mm")), 
+                busRes.fullPath, dist, busRes.totalDuration, 0, late));
+        }
+        return results;
+    }
+
+    // 策略A: 极限冲刺 (Time)
+    {
+        QVector<int> path = findMultiStagePath(startId, endId, waypoints, mode, weather, WeightMode::TIME);
+        if (!path.isEmpty()) {
+            double dist = calculateDistance(path);
+            double dur = calculateDuration(path, mode, weather);
+            bool late = enableLateCheck && isLate(dur, currentTime, classTime);
+            results.append(PathRecommendation(RouteType::FASTEST, "极限冲刺", "最快到达", path, dist, dur, 0, late));
+        }
+    }
+
+    // 策略B: 懒人养生 (Cost) - 避开楼梯/坡
+    if (mode != TransportMode::Run) {
+        QVector<int> path = findMultiStagePath(startId, endId, waypoints, mode, weather, WeightMode::COST);
+        // 简单去重：如果路径和“极限冲刺”不一样才加
+        if (!path.isEmpty() && (results.isEmpty() || path != results.last().pathNodeIds)) {
+            double dist = calculateDistance(path);
+            double dur = calculateDuration(path, mode, weather);
+            bool late = enableLateCheck && isLate(dur, currentTime, classTime);
+            results.append(PathRecommendation(RouteType::EASIEST, "懒人养生", "平坦舒适", path, dist, dur, 0, late));
+        }
+    }
+
+    // 策略C: 经济适用 (Distance) - 仅步行
+    if (mode == TransportMode::Walk) {
+        QVector<int> path = findMultiStagePath(startId, endId, waypoints, mode, weather, WeightMode::DISTANCE);
+        // 去重
+        bool isUnique = true;
+        for(const auto& r : results) if(r.pathNodeIds == path) isUnique = false;
         
-        bool late = enableLateCheck && isLate(busRes.totalDuration, currentTime, classTime);
-        double dist = calculateDistance(busRes.fullPath);
-        return PathRecommendation(RouteType::FASTEST, "校车通勤", 
-            QString("班次 %1").arg(busRes.nextBusTime.toString("HH:mm")), 
-            busRes.fullPath, dist, busRes.totalDuration, 0, late);
+        if (!path.isEmpty() && isUnique) {
+            double dist = calculateDistance(path);
+            double dur = calculateDuration(path, mode, weather);
+            bool late = enableLateCheck && isLate(dur, currentTime, classTime);
+            results.append(PathRecommendation(RouteType::SHORTEST, "经济适用", "路程最短", path, dist, dur, 0, late));
+        }
     }
 
-    QVector<int> path = findPath(startId, endId, mode, weather);
-    if (path.isEmpty()) return PathRecommendation();
-
-    double dist = calculateDistance(path);
-    double totalTime = calculateDuration(path, mode, weather);
-    if (mode == TransportMode::SharedBike) totalTime += Config::TIME_FIND_BIKE + Config::TIME_PARK_BIKE;
-
-    QString typeName = "普通模式";
-    QString label = "推荐";
-    switch (mode) {
-        case TransportMode::Walk: typeName = "步行"; label = "稳健保底"; break;
-        case TransportMode::SharedBike: typeName = "共享单车"; label = "随停随取"; break;
-        case TransportMode::EBike: typeName = "私人电驴"; label = "速度王者"; break;
-        case TransportMode::Run: typeName = "极限狂奔"; label = "可能会累"; break;
-        default: break;
-    }
-
-    bool late = enableLateCheck && isLate(totalTime, currentTime, classTime);
-    return PathRecommendation(RouteType::FASTEST, typeName, label, path, dist, totalTime, 0, late);
+    return results;
 }
 
 double GraphModel::calculateDuration(const QVector<int>& pathNodeIds, TransportMode mode, Weather weather) const {
